@@ -25,10 +25,10 @@
 
 ## 5. Состояние запуска, план, doctor и enrich
 
-- [ ] 5.1 Реализовать машину состояний (`VERSION_CHECK → PLAN → PROTECT → MERGE → INCIDENT → CONFIG → DIGEST → DONE`) с персистом `/var/lib/emerge-ai/runs/<run-id>.json`; тест: прерванный «merge» с `--resume` продолжает с сохранённым контекстом
-- [ ] 5.2 Реализовать план-фазу (depgraph через `portage_compat`) и вывод распределения очередей по тирам до подтверждения; тест на фикстуре плана: распределение совпадает
-- [ ] 5.3 Реализовать enrich pretend-фазы: genlop-оценки (парсинг вывода genlop; пометка «нет данных» + LLM-эвристика) и краткий дайджест изменений; юнит-тесты парсинга и форматирования, enrichment подставляется в хук из 2.3
-- [ ] 5.4 Реализовать авто-doctor на world/system/mass-update (dry-run, тирование, warnings tier 1–3, суммарная оценка) и проверить тестами: `@world` с tier-1 → warning, одиночный rest-tier → doctor молчит
+- [x] 5.1 Реализовать машину состояний (`VERSION_CHECK → PLAN → PROTECT → MERGE → INCIDENT → CONFIG → DIGEST → DONE`) с персистом `/var/lib/emerge-ai/runs/<run-id>.json`; тест: прерванный «merge» с `--resume` продолжает с сохранённым контекстом
+- [x] 5.2 Реализовать план-фазу (depgraph через `portage_compat`) и вывод распределения очередей по тирам до подтверждения; тест на фикстуре плана: распределение совпадает
+- [x] 5.3 Реализовать enrich pretend-фазы: genlop-оценки (парсинг вывода genlop; пометка «нет данных» + LLM-эвристика) и краткий дайджест изменений; юнит-тесты парсинга и форматирования, enrichment подставляется в хук из 2.3
+- [x] 5.4 Реализовать авто-doctor на world/system/mass-update (dry-run, тирование, warnings tier 1–3, суммарная оценка) и проверить тестами: `@world` с tier-1 → warning, одиночный rest-tier → doctor молчит
 
 ## 6. Точки восстановления (rollback)
 
