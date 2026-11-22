@@ -1,0 +1,110 @@
+import json
+
+import pytest
+
+from emerge_ai.gate import Variant, autonomy_decision, gate, render
+
+
+def scripted(*answers):
+    it = iter(answers)
+
+    def fn(prompt=""):
+        try:
+            return next(it)
+        except StopIteration:
+            raise EOFError
+    return fn
+
+
+def audit_lines(path):
+    return [json.loads(l) for l in path.read_text().splitlines()]
+
+
+def variants(actions):
+    return [
+        Variant("retry", "retry merge", pros=["simple"], cons=[], risks=["glibc tier 1"],
+                tiers=(1,), action=lambda: actions.append("retry")),
+        Variant("skip", "skip package --exclude", pros=["unblocks world"], risks=["pkg tier 5"],
+                tiers=(5,), action=lambda: actions.append("skip")),
+        Variant("rollback", "rollback to pre-merge state", kind="rollback",
+                risks=["tier 1 restore"], tiers=(1,), action=lambda: actions.append("rollback")),
+    ]
+
+
+def test_render_shows_pros_cons_risks_with_tiers():
+    text = render(variants([]))
+    assert "+ simple" in text and "- " not in text.split("simple")[1].split("\n")[0]
+    assert "! risk: glibc tier 1" in text
+    assert "[c]" in text and "[q]" in text
+
+
+def test_apply_only_after_explicit_yes(tmp_path):
+    actions = []
+    ap = tmp_path / "audit.log"
+    res = gate(variants(actions), mode={}, confirm_fn=lambda p: False,
+               input_fn=scripted("1"), audit_path=ap)
+    assert res["status"] == "declined" and actions == []
+    res = gate(variants(actions), mode={}, confirm_fn=lambda p: True,
+               input_fn=scripted("2"), audit_path=ap)
+    assert res["status"] == "applied" and actions == ["skip"]
+    dec = audit_lines(ap)
+    assert [d["decision"] for d in dec] == ["declined", "apply"]
+
+
+def test_custom_text_returns_for_second_round(tmp_path):
+    actions = []
+    res = gate(variants(actions), mode={}, confirm_fn=lambda p: True,
+               input_fn=scripted("c", "I would just reboot", "1"),
+               effects_fn=lambda t: f"EFFECTS: reboot kills sessions ({t})",
+               audit_path=tmp_path / "a.log")
+    assert res["status"] == "applied" and actions == ["retry"]
+    assert not any("reboot" in json.dumps(a) for a in actions)
+
+
+def test_invalid_choice_reasks_then_quit_eof(tmp_path):
+    actions = []
+    res = gate(variants(actions), mode={}, confirm_fn=lambda p: True,
+               input_fn=scripted("9", "zzz"), audit_path=tmp_path / "a.log")
+    assert res["status"] == "quit" and actions == []
+
+
+def test_noninteractive_rest_tier_autofix(tmp_path):
+    actions = []
+    res = gate(variants(actions), mode={"noninteractive": True},
+               confirm_fn=lambda p: pytest.fail("must not prompt"),
+               input_fn=scripted("2"), audit_path=tmp_path / "a.log")
+    assert res["status"] == "applied" and res["autonomy"] == "auto" and actions == ["skip"]
+
+
+def test_noninteractive_critical_tier_denied_with_nonzero(tmp_path):
+    actions = []
+    res = gate(variants(actions), mode={"noninteractive": True},
+               confirm_fn=lambda p: pytest.fail("must not prompt"),
+               input_fn=scripted("1"), audit_path=tmp_path / "a.log")
+    assert res["status"] == "denied" and res["exit"] == 6 and actions == []
+
+
+def test_noninteractive_rollback_denied(tmp_path):
+    actions = []
+    res = gate(variants(actions), mode={"noninteractive": True},
+               confirm_fn=lambda p: pytest.fail("must not prompt"),
+               input_fn=scripted("3"), audit_path=tmp_path / "a.log")
+    assert res["status"] == "denied" and actions == []
+
+
+def test_responsibility_autonomous_everything_including_rollback(tmp_path):
+    actions = []
+    justifications = []
+    res = gate(variants(actions), mode={"responsibility": True},
+               confirm_fn=lambda p: pytest.fail("must not prompt"),
+               input_fn=scripted("3"), audit_path=tmp_path / "a.log",
+               echo=justifications.append)
+    assert res["status"] == "applied" and actions == ["rollback"]
+    assert any("--i-understand-the-risks" in j for j in justifications)
+
+
+def test_unaffirmed_variants_have_no_system_effect():
+    v = Variant("x", "t", tiers=(1,), action=lambda: pytest.fail("mutation leaked"))
+    assert autonomy_decision({}, v)[0] == "ask"
+    assert autonomy_decision({"noninteractive": True}, v)[0] == "deny"
+    assert autonomy_decision({"responsibility": True}, v)[0] == "auto"
