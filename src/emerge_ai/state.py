@@ -43,6 +43,7 @@ class RunState:
     mode: dict = field(default_factory=dict)
     plan: list = field(default_factory=list)
     incident: dict | None = None
+    protection: dict | None = None
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 

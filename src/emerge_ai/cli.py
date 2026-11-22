@@ -13,8 +13,10 @@ from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
 from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan
+from emerge_ai import rollback as rollback_mod
+from emerge_ai.rollback import Protection
 from emerge_ai.runner import confirm, drop_flags, run_emerge, run_emerge_capturing
-from emerge_ai.tiers import TierService
+from emerge_ai.tiers import TierService, snapshot_required
 
 PRETEND_FLAGS = ("-p", "--pretend")
 ASK_FLAGS = ("-a", "--ask")
@@ -65,6 +67,12 @@ def _advance_to_merge(run, runs_dir) -> None:
         raise state.IllegalTransition(f"cannot advance {run.state} to MERGE")
 
 
+def _default_protect(run, plan) -> Protection:
+    if plan is None:
+        return Protection(run_id=run.run_id, notes=["no plan: recovery point skipped"])
+    return rollback_mod.protect(run.run_id, plan, contents_fn=portage_compat.vdb_contents)
+
+
 def main(
     argv: list[str] | None = None,
     emerge_binary: str = "emerge",
@@ -73,6 +81,8 @@ def main(
     runs_dir: str = state.RUNS_DIR,
     tiers_cache: str = "/var/lib/emerge-ai/tiers.json",
     plan_fn=build_plan,
+    protect_fn=None,
+    cleanup_fn=None,
 ) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -94,6 +104,8 @@ def main(
         return blocked
 
     resuming = "--resume" in emerge_args
+    if resuming:
+        emerge_args = [a for a in emerge_args if a != "--resume"]
     run = state.latest_incomplete(runs_dir) if resuming else None
     if resuming:
         if run is None:
@@ -159,8 +171,42 @@ def main(
             state.transition(run, state.DONE, runs_dir)
             return 0
         merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
-        _advance_to_merge(run, runs_dir)
+        if run.state == state.PLAN:
+            state.transition(run, state.PROTECT, runs_dir)
+        pfn = protect_fn or _default_protect
+        if run.protection:
+            prot = Protection(
+                run_id=run.run_id,
+                snapshot=run.protection.get("snapshot"),
+                archive_dir=run.protection.get("archive"),
+                notes=["reusing recovery point from earlier attempt"],
+            )
+        else:
+            prot = pfn(run, plan)
+        for note in prot.notes:
+            print(f"emerge-ai: {note}", file=sys.stderr)
+        run.protection = {
+            "snapshot": prot.snapshot,
+            "archive": prot.archive_dir,
+            "failed": prot.failed,
+        }
+        state.save_run(run, runs_dir)
+        if prot.failed and plan is not None and snapshot_required(plan.entries):
+            print(
+                "emerge-ai: FAILED to create a recovery point for a tier<=4 queue.",
+                file=sys.stderr,
+            )
+            if mode.noninteractive or not confirm(
+                "emerge-ai: merge without recovery point is unsafe. Proceed anyway? [y/N] "
+            ):
+                print("emerge-ai: aborted: no recovery point.", file=sys.stderr)
+                state.transition(run, state.DONE, runs_dir)
+                return 5
+        state.transition(run, state.MERGE, runs_dir)
         rc = run_emerge(merge_args, emerge_binary=emerge_binary)
+        if rc == 0 and (prot.snapshot or prot.archive_dir):
+            for line in (cleanup_fn or rollback_mod.cleanup)(prot):
+                print(f"emerge-ai: {line}", file=sys.stderr)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         return rc
 

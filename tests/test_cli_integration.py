@@ -5,6 +5,7 @@ import pytest
 
 from emerge_ai import cli, state
 from emerge_ai.plan import Plan, PlanEntry
+from emerge_ai.rollback import Protection
 
 
 @pytest.fixture
@@ -26,6 +27,7 @@ def test_ask_shows_digest_and_runs_merge(emerge_stub, ok_compat, monkeypatch, tm
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         plan_fn=lambda a, s: plan,
+        protect_fn=lambda run, plan: Protection(run_id=run.run_id),
     )
     assert rc == 0
     runs = list(tmp_path.glob("*.json"))
@@ -69,4 +71,91 @@ def test_resume_reuses_incomplete_run_context(emerge_stub, ok_compat, tmp_path, 
     assert after["state"] == "DONE"
     assert after["incident"] == {"class": "block"}
     assert "resuming run" in capsys.readouterr().err
-    assert calls() == [["--resume"]]
+    assert calls() == [[]]
+
+
+def _iter_input(*answers):
+    it = iter(answers)
+    return lambda prompt="": next(it)
+
+
+def test_protection_created_cleaned_on_success(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(builtins, "input", _iter_input("y"))
+    events = []
+    prot = Protection(run_id="x", snapshot="/snap/r")
+    rc = cli.main(
+        ["-a", "sys-libs/glibc"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-libs/glibc-2.42", 1, "hint")]),
+        protect_fn=lambda run, plan: prot,
+        cleanup_fn=lambda p: events.append(p) or ["cleaned"],
+    )
+    assert rc == 0
+    assert events == [prot]
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["protection"]["snapshot"] == "/snap/r"
+    assert saved["state"] == "DONE"
+
+
+def test_protection_failure_denied_aborts_before_merge(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(builtins, "input", _iter_input("y", "n"))
+    failed = Protection(run_id="x", failed=True)
+    rc = cli.main(
+        ["-a", "sys-libs/glibc"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-libs/glibc-2.42", 1, "hint")]),
+        protect_fn=lambda run, plan: failed,
+    )
+    assert rc == 5
+    assert calls() == [["-a", "sys-libs/glibc", "--pretend"]]
+
+
+def test_protection_failure_noninteractive_refuses(emerge_stub, ok_compat, tmp_path):
+    binary, calls = emerge_stub
+    failed = Protection(run_id="x", failed=True)
+    rc = cli.main(
+        ["--noninteractive", "-a", "sys-libs/glibc"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-libs/glibc-2.42", 1, "hint")]),
+        protect_fn=lambda run, plan: failed,
+    )
+    assert rc == 5
+    assert calls() == [["-a", "sys-libs/glibc", "--pretend"]]
+
+
+def test_resume_reuses_existing_recovery_point(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, calls = emerge_stub
+
+    def input_y(prompt=""):
+        return "y"
+
+    import builtins as b
+    b_input = b.input
+    try:
+        b.input = input_y
+        run = state.new_run(["--resume", "-a", "sys-apps/x"], {"noninteractive": False})
+        run.state = state.INCIDENT
+        run.protection = {"snapshot": "/snap/keep", "archive": None, "failed": False}
+        state.save_run(run, runs_dir=tmp_path)
+
+        def boom(run, plan):
+            raise AssertionError("protect must not re-run when recovery point exists")
+
+        rc = cli.main(
+            ["--resume", "-a", "sys-apps/x"],
+            emerge_binary=binary,
+            runs_dir=str(tmp_path),
+            plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-editors/vim-9.1", 5, "hint")]),
+            protect_fn=boom,
+            cleanup_fn=lambda p: [],
+        )
+    finally:
+        b.input = b_input
+    assert rc == 0
+    assert "reusing recovery point" in capsys.readouterr().err
+    assert calls() == [["-a", "sys-apps/x", "--pretend"], ["sys-apps/x"]]
