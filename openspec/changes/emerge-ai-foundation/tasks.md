@@ -8,9 +8,9 @@
 
 ## 2. CLI: флаги, passthrough, перехват
 
-- [ ] 2.1 Реализовать парсинг собственных флагов (`--noninteractive`, `--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences`) поверх `parse_known_args` и проверить юнит-тестами: в emerge уходят только его флаги, режимы включаются
-- [ ] 2.2 Реализовать passthrough-исполнение emerge (subprocess, проброс stdin/stdout/stderr, код выхода) и проверить на скрипте-стабе emerge: вывод и код передаются дословно
-- [ ] 2.3 Реализовать перехват `-a/--ask`, `-p/--pretend` (pretend исполняется emerge-ai, вывод печатается дословно, хук обогащения, собственный финальный «Proceed?») и проверить тестами на стабе: без подтверждения merge не запускается; задокументировать флаги в README
+- [x] 2.1 Реализовать парсинг собственных флагов (`--noninteractive`, `--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences`) поверх `parse_known_args` и проверить юнит-тестами: в emerge уходят только его флаги, режимы включаются
+- [x] 2.2 Реализовать passthrough-исполнение emerge (subprocess, проброс stdin/stdout/stderr, код выхода) и проверить на скрипте-стабе emerge: вывод и код передаются дословно
+- [x] 2.3 Реализовать перехват `-a/--ask`, `-p/--pretend` (pretend исполняется emerge-ai, вывод печатается дословно, хук обогащения, собственный финальный «Proceed?») и проверить тестами на стабе: без подтверждения merge не запускается; задокументировать флаги в README
 
 ## 3. Конфиг, LLM-клиент, промпты
 
