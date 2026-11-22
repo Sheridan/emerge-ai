@@ -1,0 +1,6 @@
+These are the packages that would be merged, in order:
+!!! Problem resolving dependencies for app-misc/thing from @world
+... done!
+These sets need to be passed for acceptance or the merge cannot be completed:
+!!! The ebuild selected to satisfy has the following conflicts:
+ * app-misc/old-stuff blocks app-misc/thing

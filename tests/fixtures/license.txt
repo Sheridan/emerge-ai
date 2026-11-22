@@ -1,0 +1,6 @@
+The following packages have unaccepted licenses:
+
+ * dev-libs/somebin-2.0
+
+These sets need to be passed for acceptance or the merge cannot be completed:
+somebin

@@ -1,0 +1,5 @@
+!!! The ebuild selected to satisfy "=app-misc/bar-1.0" has the following unsupported KEYWORDS:
+!!!    ** ~amd64
+!!! The following installed packages are masked:
+There are no ebuilds marked as stable for this package. You may
+ACCEPT_KEYWORDS="~amd64" for this emerge.

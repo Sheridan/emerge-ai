@@ -17,7 +17,8 @@ def test_passthrough_stdio_and_rc(emerge_stub, capfd, ok_compat, monkeypatch, tm
     captured = capfd.readouterr()
     assert rc == 17
     assert "STUB-OUT line1" in captured.out
-    assert "STUB-ERR line1" in captured.err
+    # merge output is tee-captured (stderr merged into stdout) for incident context
+    assert "STUB-ERR line1" in captured.out
     assert calls() == [["-uDN", "@world"]]  # own flag never reaches emerge
 
 

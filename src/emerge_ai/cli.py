@@ -11,6 +11,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
+from emerge_ai.incident import build_incident
 from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan
 from emerge_ai import rollback as rollback_mod
@@ -127,7 +128,9 @@ def main(
 
     if not pretend and not ask:
         _advance_to_merge(run, runs_dir)
-        rc = run_emerge(emerge_args, emerge_binary=emerge_binary)
+        rc, output = run_emerge_capturing(emerge_args, emerge_binary=emerge_binary)
+        if rc != 0:
+            run.incident = build_incident(rc, output, emerge_args)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         return rc
 
@@ -203,7 +206,9 @@ def main(
                 state.transition(run, state.DONE, runs_dir)
                 return 5
         state.transition(run, state.MERGE, runs_dir)
-        rc = run_emerge(merge_args, emerge_binary=emerge_binary)
+        rc, output = run_emerge_capturing(merge_args, emerge_binary=emerge_binary)
+        if rc != 0:
+            run.incident = build_incident(rc, output, merge_args)
         if rc == 0 and (prot.snapshot or prot.archive_dir):
             for line in (cleanup_fn or rollback_mod.cleanup)(prot):
                 print(f"emerge-ai: {line}", file=sys.stderr)

@@ -1,0 +1,4 @@
+!!! The ebuild selected to satisfy "app-misc/quux-1.1" has the following USE requirements:
+!!!   REQUIRED_USE: ??? (ssl gnutls)
+The keyword requirement plus the following dependencies are blocking:
+USE="python" required by the ebuild, which cannot be satisfied

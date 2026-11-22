@@ -1,0 +1,3 @@
+Calculating dependencies... done!
+emerge: there are no ebuilds to satisfy "app-misc/doesnotexist".
+(dependency required "app-misc/thing" [ebuild])

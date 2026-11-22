@@ -12,7 +12,13 @@ if log:
         f.write(" ".join(sys.argv[1:]) + "\\n")
 print("STUB-OUT line1")
 print("STUB-ERR line1", file=sys.stderr)
-sys.exit(int(os.environ.get("EMERGE_STUB_RC", "0")))
+err = os.environ.get("EMERGE_STUB_ERR")
+if err:
+    print(err, file=sys.stderr)
+rc = os.environ.get("EMERGE_STUB_RC", "0")
+if "--pretend" in sys.argv:
+    rc = os.environ.get("EMERGE_STUB_PRETEND_RC", rc)
+sys.exit(int(rc))
 """
 
 

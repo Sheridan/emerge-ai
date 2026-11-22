@@ -1,0 +1,4 @@
+ * IMPORTANT: Some config files protect is enabled:
+!!! Existing file or directory "/etc/foo.conf" belongs to cat/pkg-1
+>>> Regenerating /etc/ld.so.cache...
+ * --- !mtime-overlay-protected /etc/foo.conf

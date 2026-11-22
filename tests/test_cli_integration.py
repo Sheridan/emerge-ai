@@ -159,3 +159,31 @@ def test_resume_reuses_existing_recovery_point(emerge_stub, ok_compat, tmp_path,
     assert rc == 0
     assert "reusing recovery point" in capsys.readouterr().err
     assert calls() == [["-a", "sys-apps/x", "--pretend"], ["sys-apps/x"]]
+
+
+def test_merge_failure_records_incident_context(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.setenv(
+        "EMERGE_STUB_ERR",
+        " * ERROR: app-misc/foo-1.2.3::gentoo failed (compile phase):\n"
+        " *   emake failed\n",
+    )
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "y")
+    rc = cli.main(
+        ["-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.2.3", 5, "hint")]),
+        protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+    )
+    assert rc == 1
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["state"] == "INCIDENT"
+    inc = saved["incident"]
+    assert inc["class"] == "compile"
+    assert inc["cpv"] == "app-misc/foo-1.2.3"
+    assert inc["phase"] == "compile"
+    assert inc["build_log"] == "/var/tmp/portage/app-misc/foo-1.2.3/temp/build.log"
+    assert "emake failed" in inc["stderr_tail"]

@@ -1,0 +1,5 @@
+These are the dependencies in the cycle:
+ * net-libs/glib-networking-2.78.0 ebuild scheduled (merging) that requires net-libs/libsoup-3.4.2:0/0=
+ (see https://wiki.gentoo.org/wiki/Project:Quality_Assurance/Dependency_graph_cycles)
+The cycle continues:
+ * Dependency loop #1 of package net-libs/libsoup-3.4.2.

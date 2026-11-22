@@ -1,0 +1,5 @@
+Calculating dependencies... done!
+!!! One or more packages are required but masked
+emerge: there are ebuilds matching the ebuild requirements, but
+ * dev-libs/broken-9.9::gentoo is masked by: package.mask
+       dev-libs/broken-9.9 is hard-masked due to unresolved bugs

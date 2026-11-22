@@ -1,0 +1,5 @@
+>>> Downloading 'https://distfiles.gentoo.org/distfiles/foo-1.0.tar.gz'
+!!! Fetched file: foo-1.0.tar.gz VERIFY FAILED!
+Reason: Size of None does not match any digest.
+Download failed for 'https://example.org/foo-1.0.tar.gz'
+Could not fetch "foo-1.0.tar.gz" from any mirrors

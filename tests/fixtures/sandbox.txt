@@ -1,0 +1,5 @@
+ * Failing command: /var/tmp/portage/app-misc/foo-1.2.3/temp/environment
+sandbox:        open  write access: /usr/share/foo/data [pid=12345]
+sandbox: Popen is not allowed to open /usr/bin/env for exec mode
+Please review the above list of sandbox violations to identify
+the affected files/directories.

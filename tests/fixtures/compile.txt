@@ -1,0 +1,5 @@
+>>> Emerging (1 of 3) app-misc/foo-1.2.3::gentoo
+ * ERROR: app-misc/foo-1.2.3::gentoo failed (compile phase):
+ *   emake failed
+ * Command failed: Compiling src/main.c
+>>> Working directory: /var/tmp/portage/app-misc/foo-1.2.3/temp/build.log
