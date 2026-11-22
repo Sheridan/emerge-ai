@@ -2,9 +2,9 @@
 
 ## 1. Каркас проекта и привязка версии
 
-- [ ] 1.1 Создать python-каркас (`pyproject.toml`, пакет `emerge_ai`, entry-point `emerge-ai`, версия как константа 3.0.82.x) и проверить, что `emerge-ai --version` печатает версию проекта рядом с версией portage
-- [ ] 1.2 Реализовать runtime-проверку совместимости (`portage.VERSION` major.minor == версии проекта, иначе сообщение и ненулевой выход без вызова emerge) и покрыть юнит-тестами со стабом portage (3.0.83 → pass, 3.1.0 → exit≠0)
-- [ ] 1.3 Реализовать read-only прослойку `portage_compat` (depgraph, sets, portageq, vdb/CONTENTS) и проверить импорты и базовые запросы на живом portage 3.0.82 хоста плюс юнит-тесты со стабами
+- [x] 1.1 Создать python-каркас (`pyproject.toml`, пакет `emerge_ai`, entry-point `emerge-ai`, версия как константа 3.0.82.x) и проверить, что `emerge-ai --version` печатает версию проекта рядом с версией portage
+- [x] 1.2 Реализовать runtime-проверку совместимости (`portage.VERSION` major.minor == версии проекта, иначе сообщение и ненулевой выход без вызова emerge) и покрыть юнит-тестами со стабом portage (3.0.83 → pass, 3.1.0 → exit≠0)
+- [x] 1.3 Реализовать read-only прослойку `portage_compat` (depgraph, sets, portageq, vdb/CONTENTS) и проверить импорты и базовые запросы на живом portage 3.0.82 хоста плюс юнит-тесты со стабами
 
 ## 2. CLI: флаги, passthrough, перехват
 

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emerge-ai"
+description = "AI-assisted emerge wrapper for Gentoo (version-locked to sys-apps/portage)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+dynamic = ["version"]
+
+[project.scripts]
+emerge-ai = "emerge_ai.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "emerge_ai.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
