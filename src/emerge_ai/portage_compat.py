@@ -108,3 +108,16 @@ def env_value(key: str) -> str:
 def vdb_aux(cpv: str, field: str) -> str:
     """Arbitrary vdb aux field (USE, SLOT, REPO...); read-only."""
     return str(_vdb_api().aux_get(cpv, [field])[0])
+
+
+def emerge_info(emerge_binary: str = "emerge") -> str:
+    """Output of `emerge --info`; read-only metadata for the system context."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [emerge_binary, "--info"], capture_output=True, text=True, timeout=180
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PortageUnavailable(f"emerge --info: {exc}") from exc
+    return proc.stdout

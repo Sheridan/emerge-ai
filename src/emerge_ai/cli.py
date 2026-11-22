@@ -74,6 +74,35 @@ def _default_protect(run, plan) -> Protection:
     return rollback_mod.protect(run.run_id, plan, contents_fn=portage_compat.vdb_contents)
 
 
+def _maybe_agent(run, config_path, agent_fn=None) -> None:
+    if not run.incident or run.incident.get("class") == "plan-failed":
+        return
+    try:
+        cfg = load_config(config_path)
+    except (ConfigError, FileNotFoundError):
+        return
+    if not cfg.endpoint:
+        return
+    print("emerge-ai: incident -> consulting agent (proposals only, nothing is executed)...",
+          file=sys.stderr)
+    try:
+        if agent_fn is not None:
+            proposal = agent_fn(run.incident)
+        else:
+            from emerge_ai.agent import IncidentAgent
+            from emerge_ai.prompts import collect_context
+
+            client = LLMClient(cfg)
+            info = portage_compat.emerge_info()
+            agent = IncidentAgent(
+                client, context=collect_context(info, cfg.language)
+            )
+            proposal = agent.propose(run.incident).proposal
+        print(f"emerge-ai: agent proposal:\n{proposal}", file=sys.stderr)
+    except Exception as exc:  # agent must never mask the original failure rc
+        print(f"emerge-ai: agent unavailable: {exc}", file=sys.stderr)
+
+
 def main(
     argv: list[str] | None = None,
     emerge_binary: str = "emerge",
@@ -84,6 +113,7 @@ def main(
     plan_fn=build_plan,
     protect_fn=None,
     cleanup_fn=None,
+    agent_fn=None,
 ) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -132,6 +162,8 @@ def main(
         if rc != 0:
             run.incident = build_incident(rc, output, emerge_args)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
+        if rc != 0:
+            _maybe_agent(run, config_path, agent_fn)
         return rc
 
     if run.state == state.VERSION_CHECK:
@@ -213,6 +245,8 @@ def main(
             for line in (cleanup_fn or rollback_mod.cleanup)(prot):
                 print(f"emerge-ai: {line}", file=sys.stderr)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
+        if rc != 0:
+            _maybe_agent(run, config_path, agent_fn)
         return rc
 
     state.transition(run, state.DONE, runs_dir)

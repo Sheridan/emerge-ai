@@ -187,3 +187,31 @@ def test_merge_failure_records_incident_context(emerge_stub, ok_compat, monkeypa
     assert inc["phase"] == "compile"
     assert inc["build_log"] == "/var/tmp/portage/app-misc/foo-1.2.3/temp/build.log"
     assert "emake failed" in inc["stderr_tail"]
+
+
+def test_incident_consults_agent_and_prints_proposal(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: write access denied: /usr/share/x")
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://localhost:1/v1", "model": "m"}')
+    seen = []
+
+    def fake_agent(inc):
+        seen.append(inc)
+        return "PROPOSAL: add sandbox manifest"
+
+    rc = cli.main(
+        ["--noninteractive", "-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        config_path=str(cfg),
+        plan_fn=lambda a, s: None,
+        protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+        agent_fn=fake_agent,
+    )
+    assert rc == 1
+    assert seen and seen[0]["class"] == "sandbox"
+    err = capsys.readouterr().err
+    assert "consulting agent" in err and "PROPOSAL: add sandbox manifest" in err
