@@ -34,5 +34,25 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
 
 ## Конфигурация
 
-`/etc/portage/emerge-ai.json` (права 0600, иначе предупреждение; без
-`endpoint` — явная ошибка). Описание схемы появится вместе с группой 3.
+`/etc/portage/emerge-ai.json` — JSON-объект; файл может содержать API-ключ,
+права 0600 (при более широких — предупреждение). Без `endpoint` — явная
+ошибка перед любым обращением к модели.
+
+```json
+{
+  "endpoint": "http://127.0.0.1:8080/v1",
+  "model": "qwen3.8-flash-next-unsloth-ud-q5_k_xl",
+  "api_key": null,
+  "reasoning_show": true,
+  "language": "auto",
+  "web_access": true
+}
+```
+
+- `endpoint` — OpenAI-совместимый base URL (`/v1/chat/completions`).
+- `model` — имя модели у провайдера.
+- `reasoning_show` — показывать `reasoning_content` модели (по умолчанию вкл).
+- `language` — `auto` (из `LANG`/`LC_*`) либо явно (`russian`, `english`, ...).
+- `web_access` — разрешён ли агенту веб-поиск при диагностике (по умолч. вкл).
+
+Неизвестные ключи игнорируются с предупреждением.

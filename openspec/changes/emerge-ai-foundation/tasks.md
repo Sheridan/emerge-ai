@@ -14,9 +14,9 @@
 
 ## 3. Конфиг, LLM-клиент, промпты
 
-- [ ] 3.1 Реализовать загрузку `/etc/portage/emerge-ai.json` с дефолтами (`reasoning_show=on`, `language=auto`, `web_access=on`), проверкой 0600 с предупреждением и явной ошибкой без endpoint; покрыть юнит-тестами, описание схемы конфига — в README
-- [ ] 3.2 Реализовать OpenAI-совместимый клиент `/v1/chat/completions` с native tool-calling, рендером `reasoning_content` по опции и параметром языка; replay-тест против локального strata-эндпоинта: `tool_calls` исполняются, цикл завершается, reasoning виден только при включённой опции
-- [ ] 3.3 Разложить статические правила в `prompts/` (репозиторий → `/usr/share/emerge-ai/prompts`) и реализовать генерацию системного контекста в `/var/lib/emerge-ai/prompts` (emerge --info, profile, USE, ФС, systemd, язык); проверить юнит-тестом состава и smoke-запросом к страте, что правила попадают в system-часть
+- [x] 3.1 Реализовать загрузку `/etc/portage/emerge-ai.json` с дефолтами (`reasoning_show=on`, `language=auto`, `web_access=on`), проверкой 0600 с предупреждением и явной ошибкой без endpoint; покрыть юнит-тестами, описание схемы конфига — в README
+- [x] 3.2 Реализовать OpenAI-совместимый клиент `/v1/chat/completions` с native tool-calling, рендером `reasoning_content` по опции и параметром языка; replay-тест против локального strata-эндпоинта: `tool_calls` исполняются, цикл завершается, reasoning виден только при включённой опции
+- [x] 3.3 Разложить статические правила в `prompts/` (репозиторий → `/usr/share/emerge-ai/prompts`) и реализовать генерацию системного контекста в `/var/lib/emerge-ai/prompts` (emerge --info, profile, USE, ФС, systemd, язык); проверить юнит-тестом состава и smoke-запросом к страте, что правила попадают в system-часть
 
 ## 4. Risk-tiers
 
