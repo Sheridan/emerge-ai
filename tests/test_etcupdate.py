@@ -103,7 +103,7 @@ def incident_for(etc):
 def test_etc_flow_disabled_shows_diff_only(tmp_path, capsys):
     cfg, etc = _cfg_dir(tmp_path, llm_flag=False)
     run = type("R", (), {"incident": incident_for(etc)})()
-    _etc_flow(run, str(cfg), confirm_fn=lambda p: True, client_factory=lambda c: pytest.fail("no LLM"))
+    _etc_flow(run, str(cfg), confirm_fn=lambda p: True, client_factory=lambda c, **kw: pytest.fail("no LLM"))
     err = capsys.readouterr().err
     assert "+KexAlgorithms x" in err and "diffs only" in err
     assert (etc / "._cfg0000_sshd_config").exists()
@@ -118,7 +118,7 @@ def test_etc_flow_merge_with_citations(tmp_path, capsys):
     run.incident = incident_for(etc)
     inputs = iter([""])
     _etc_flow(run, str(cfg), confirm_fn=lambda p: True, llm=True,
-              input_fn=lambda p: next(inputs), client_factory=lambda c: client)
+              input_fn=lambda p: next(inputs), client_factory=lambda c, **kw: client)
     err = capsys.readouterr().err
     assert "cite: sshd_config.5.txt" in err
     assert (etc / "sshd_config").read_text() == merged
@@ -134,7 +134,7 @@ def test_etc_flow_user_override(tmp_path, capsys):
     run.incident = incident_for(etc)
     inputs = iter([f"merge {user_file}"])
     _etc_flow(run, str(cfg), confirm_fn=lambda p: True, llm=True,
-              input_fn=lambda p: next(inputs), client_factory=lambda c: client)
+              input_fn=lambda p: next(inputs), client_factory=lambda c, **kw: client)
     assert (etc / "sshd_config").read_text() == "MINE\n"
 
 

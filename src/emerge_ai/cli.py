@@ -24,6 +24,7 @@ from emerge_ai.tiers import TierService, snapshot_required
 
 PRETEND_FLAGS = ("-p", "--pretend")
 ASK_FLAGS = ("-a", "--ask")
+VERBOSE_FLAGS = ("-v", "--verbose")
 
 
 def _version_text() -> tuple[str, int]:
@@ -47,11 +48,11 @@ def _compat_gate() -> int | None:
     return None
 
 
-def _make_tier_service(cfg: Config, cache_path=None):
+def _make_tier_service(cfg: Config, cache_path=None, show_reasoning=False):
     client = None
     if cfg.endpoint:
         try:
-            client = LLMClient(cfg)
+            client = LLMClient(cfg, show_reasoning=show_reasoning)
         except LLMError as exc:
             print(f"emerge-ai: {exc}; tiers fall back to conservative", file=sys.stderr)
     return TierService(client, cache_path=cache_path)
@@ -77,7 +78,7 @@ def _default_protect(run, plan) -> Protection:
     return rollback_mod.protect(run.run_id, plan, contents_fn=portage_compat.vdb_contents)
 
 
-def _maybe_agent(run, config_path, agent_fn=None) -> str | None:
+def _maybe_agent(run, config_path, agent_fn=None, show_reasoning=False) -> str | None:
     if not run.incident:
         return None
     try:
@@ -96,12 +97,14 @@ def _maybe_agent(run, config_path, agent_fn=None) -> str | None:
             from emerge_ai.agent import IncidentAgent
             from emerge_ai.prompts import collect_context
 
-            client = LLMClient(cfg)
+            client = LLMClient(cfg, show_reasoning=show_reasoning)
             info = portage_compat.emerge_info()
             agent = IncidentAgent(
                 client, context=collect_context(info, cfg.language)
             )
-            proposal = agent.propose(run.incident).proposal
+            proposal = agent.propose(
+                run.incident, render_to=sys.stderr if show_reasoning else None
+            ).proposal
         print(f"emerge-ai: agent proposal:\n{proposal}", file=sys.stderr)
         return proposal
     except Exception as exc:  # agent must never mask the original failure rc
@@ -109,7 +112,7 @@ def _maybe_agent(run, config_path, agent_fn=None) -> str | None:
         return None
 
 
-def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_factory=None) -> None:
+def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_factory=None, show_reasoning=False) -> None:
     if not run.incident or run.incident.get("class") != "config-protect":
         return
     try:
@@ -144,7 +147,7 @@ def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_
                     r = _sb.web_fetch("https://wiki.gentoo.org/")
                     return [(r["url"], r["text"])]
             docs = etcupdate.collect_docs(current, web_fetch=web)
-            decision = etcupdate.llm_decide(client_factory(cfg), newp, current, docs)
+            decision = etcupdate.llm_decide(client_factory(cfg, show_reasoning=show_reasoning), newp, current, docs)
         except Exception as exc:
             print(f"emerge-ai: etc LLM unavailable: {exc}", file=sys.stderr)
             continue
@@ -200,12 +203,12 @@ def _post_run_digest(run, output, config_path, runs_dir) -> None:
         print(digest.post_run_digest(run, output), file=sys.stderr)
 
 
-def _changelog_mode(config_path) -> int:
+def _changelog_mode(config_path, show_reasoning=False) -> int:
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
         cfg = Config()
-    client = LLMClient(cfg) if cfg.endpoint else None
+    client = LLMClient(cfg, show_reasoning=show_reasoning) if cfg.endpoint else None
     text = changelog.collect_digest(
         gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir, client=client
     )
@@ -253,9 +256,10 @@ def main(
         return meta
 
     mode, emerge_args = parse_own_flags(argv)
+    verbose = flag_present(emerge_args, VERBOSE_FLAGS)
 
     if mode.changelog:
-        return _changelog_mode(config_path)
+        return _changelog_mode(config_path, verbose)
 
     blocked = _compat_gate()
     if blocked is not None:
@@ -273,7 +277,7 @@ def main(
             run.incident = build_incident(rc, output, emerge_args)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
-            run.agent_proposal = _maybe_agent(run, config_path, agent_fn)
+            run.agent_proposal = _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose)
             _etc_flow(run, config_path, confirm_fn=lambda _p: False, llm=False)
         else:
             _post_run_digest(run, output, config_path, runs_dir)
@@ -293,14 +297,14 @@ def main(
         incident["class"] = "plan-failed"
         run.incident = incident
         state.transition(run, state.INCIDENT, runs_dir)
-        run.agent_proposal = _maybe_agent(run, config_path, agent_fn)
+        run.agent_proposal = _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose)
         state.save_run(run, runs_dir)
         return rc
 
     plan = None
     try:
         cfg = load_config(config_path)
-        tier_service = _make_tier_service(cfg, cache_path=tiers_cache)
+        tier_service = _make_tier_service(cfg, cache_path=tiers_cache, show_reasoning=verbose)
         plan = plan_fn(emerge_args, tier_service)
         run.plan = [asdict(e) for e in plan.entries]
         state.save_run(run, runs_dir)
@@ -366,8 +370,8 @@ def main(
                 print(f"emerge-ai: {line}", file=sys.stderr)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
-            run.agent_proposal = _maybe_agent(run, config_path, agent_fn)
-            _etc_flow(run, config_path, confirm_fn=confirm)
+            run.agent_proposal = _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose)
+            _etc_flow(run, config_path, confirm_fn=confirm, show_reasoning=verbose)
         else:
             _post_run_digest(run, output, config_path, runs_dir)
         state.save_run(run, runs_dir)

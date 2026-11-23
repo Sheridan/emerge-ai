@@ -12,8 +12,8 @@
 
 ## 3. CLI: verbose-детект и проброс (cli.py)
 
-- [ ] 3.1 `VERBOSE_FLAGS = ("-v", "--verbose")`; в `main()` `verbose = flag_present(emerge_args, VERBOSE_FLAGS)` рядом с pretend/ask; проброс `show_reasoning=verbose` в `_make_tier_service`, `_maybe_agent`, `_changelog_mode`, `_etc_flow` (`client_factory(cfg, show_reasoning=verbose)`); `pytest tests/test_cli.py tests/test_cli_integration.py` — зелено (существующие)
-- [ ] 3.2 CLI-тесты: (a) `cli.main(["-av", "x"])` → emerge-stub вызван с `["-av", ...]` (флаг не вырезан, кластер распознан); (b) `_maybe_agent` при verbose конструирует `LLMClient` с `show_reasoning=True` (monkeypatch перехват kwargs), без `-v` — False; `pytest tests/test_cli.py -k "verbose or reasoning"` — зелено
+- [x] 3.1 `VERBOSE_FLAGS = ("-v", "--verbose")`; в `main()` `verbose = flag_present(emerge_args, VERBOSE_FLAGS)` рядом с pretend/ask; проброс `show_reasoning=verbose` в `_make_tier_service`, `_maybe_agent`, `_changelog_mode`, `_etc_flow` (`client_factory(cfg, show_reasoning=verbose)`); `pytest tests/test_cli.py tests/test_cli_integration.py` — зелено (существующие)
+- [x] 3.2 CLI-тесты: (a) `cli.main(["-av", "x"])` → emerge-stub вызван с `["-av", ...]` (флаг не вырезан, кластер распознан); (b) `_maybe_agent` при verbose конструирует `LLMClient` с `show_reasoning=True` (monkeypatch перехват kwargs), без `-v` — False; `pytest tests/test_cli.py -k "verbose or reasoning"` — зелено
 
 ## 4. Документация
 

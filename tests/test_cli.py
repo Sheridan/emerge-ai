@@ -176,3 +176,39 @@ def test_changelog_bypasses_version_gate(emerge_stub, monkeypatch, capsys, tmp_p
     assert calls() == []
     err = capsys.readouterr().err
     assert "incompatible" not in err.lower()
+
+
+# --- verbose / reasoning visibility (spec: config-prompts «Вывод рассуждений») ---
+
+
+def test_verbose_cluster_keeps_v_for_emerge(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    prompts = []
+    monkeypatch.setattr(builtins, "input", lambda prompt="": prompts.append(prompt) or "y")
+    rc = cli.main(["-av", "sys-apps/x"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    assert rc == 0
+    assert prompts  # the -a inside the cluster was recognized as ask
+    assert calls() == [["-v", "sys-apps/x", "--pretend"], ["-v", "sys-apps/x"]]  # -v survives everywhere
+
+
+def test_maybe_agent_gated_on_show_reasoning(monkeypatch, tmp_path):
+    from emerge_ai import state
+    from emerge_ai.flags import Mode
+
+    captured = []
+
+    class Boom:
+        def __init__(self, cfg, **kw):
+            captured.append(kw)
+            raise RuntimeError("construction stopped")
+
+    monkeypatch.setattr(cli, "LLMClient", Boom)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://x/v1"}')
+    cfg.chmod(0o600)
+    run = state.new_run(["-v"], Mode())
+    run.incident = {"class": "block"}
+    cli._maybe_agent(run, str(cfg))
+    assert captured[-1] == {"show_reasoning": False}
+    cli._maybe_agent(run, str(cfg), show_reasoning=True)
+    assert captured[-1] == {"show_reasoning": True}
