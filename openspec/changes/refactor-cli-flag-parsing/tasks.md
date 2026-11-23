@@ -20,7 +20,7 @@
 ## 4. Интеграционная проверка
 
 - [x] 4.1 Полный `pytest` — все тесты зелёные; `openspec validate refactor-cli-flag-parsing --strict` без ошибок; сценарии дельты cli-compat покрыты тестами (сверить каждый сценарий с тестом и перечислить соответствие в PR-описании/коммите)
-- [ ] 4.2 Ручная smoke-проверка на стенде без live-мутаций: `emerge-ai --help`, `emerge-ai -V`, `emerge-ai -p --help` (справка emerge), пустой runs-каталог + `EMERGE_AI_RUNS_DIR=... emerge-ai --resume` (эмердж получает `--resume`) — поведение совпадает со спекой
+- [x] 4.2 Ручная smoke-проверка на стенде без live-мутаций: `emerge-ai --help`, `emerge-ai -V`, `emerge-ai -p --help` (справка emerge), пустой runs-каталог + `EMERGE_AI_RUNS_DIR=... emerge-ai --resume` (эмердж получает `--resume`) — поведение совпадает со спекой
 
 ## Workflow follow-up
 
