@@ -1,6 +1,7 @@
 import builtins
 import io
 import json
+import sys
 
 import pytest
 
@@ -73,6 +74,25 @@ def test_resume_without_run_passes_flag_to_emerge(emerge_stub, ok_compat, tmp_pa
     assert calls() == [["--resume"]]  # emerge keeps its own resume semantics
     assert len(list(tmp_path.glob("*.json"))) == 1  # a fresh run is recorded
     assert "passing --resume to emerge" in capsys.readouterr().err
+
+
+def test_capture_adds_color_flag_on_tty_stdout(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(sys, "stdout", TTY())
+    rc = cli.main(
+        ["--noninteractive", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: None,
+    )
+    assert rc == 0
+    assert calls()[0][0] == "--color=y"  # captured emerge never sees a TTY; color is explicit
 
 
 def test_resume_reuses_incomplete_run_context(emerge_stub, ok_compat, tmp_path, capsys):

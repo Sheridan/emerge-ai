@@ -16,13 +16,26 @@ def run_emerge(emerge_args: list[str], emerge_binary: str = EMERGE) -> int:
     return subprocess.run([emerge_binary, *emerge_args]).returncode
 
 
+def with_color_flag(emerge_args: list[str], stream=None) -> list[str]:
+    """Emerge runs with captured stdout, so portage's auto-detect never colors;
+    request color explicitly when emerge-ai's own stdout takes it
+    (spec: console-output). A user-specified --color is passed through untouched."""
+    stream = sys.stdout if stream is None else stream
+    args = list(emerge_args)
+    if any(a == "--color" or a.startswith("--color=") for a in args):
+        return args
+    if ui.supports_color(stream):
+        args.insert(0, "--color=y")
+    return args
+
+
 def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) -> tuple[int, str]:
     """Run emerge (typically --pretend), mirroring output to stdout while
     buffering it for the enrichment hook. No TTY is attached. stdout stays
     byte-identical passthrough (spec: console-output); the buffer is ANSI-stripped
     because it feeds parsing and the LLM (design D5)."""
     proc = subprocess.Popen(
-        [emerge_binary, *emerge_args],
+        [emerge_binary, *with_color_flag(emerge_args)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

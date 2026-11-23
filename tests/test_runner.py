@@ -1,7 +1,27 @@
+import io
 import stat
 
 from emerge_ai.digest import parse_installed
-from emerge_ai.runner import run_emerge_capturing
+from emerge_ai.runner import run_emerge_capturing, with_color_flag
+
+
+class TTY(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_with_color_flag_injects_only_on_colorful_tty(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("TERM", raising=False)
+    assert with_color_flag(["-uDN", "@world"], stream=TTY()) == ["--color=y", "-uDN", "@world"]
+    assert with_color_flag(["-uDN", "@world"], stream=io.StringIO()) == ["-uDN", "@world"]
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert with_color_flag(["-uDN", "@world"], stream=TTY()) == ["-uDN", "@world"]
+
+
+def test_with_color_flag_respects_user_color():
+    for user in (["--color", "n"], ["--color=n"], ["-av", "--color=m"]):
+        assert with_color_flag(user, stream=TTY()) == user
 
 ANSI_STUB = """#!/usr/bin/env python3
 import sys
