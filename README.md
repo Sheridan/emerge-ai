@@ -56,6 +56,11 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
 | `--noninteractive` | без вопросов в TTY; автономные действия — только rest-tier, остальное fail-closed (лог + ненулевой выход) |
 | `--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences` | полная автономия, включая исполнение отката |
 
+`-v`/`--verbose` (флаг emerge, передаётся ему без изменений) дополнительно
+включает вывод рассуждений модели (`[reasoning] ...` в stderr); по умолчанию
+выключен. В старых конфигах ключ `reasoning_show` игнорируется с
+предупреждением.
+
 ## Перехват `-a/--ask` и `-p/--pretend`
 
 - `-p`/`--pretend`: план исполняет `emerge`, вывод печатается дословно,
@@ -78,7 +83,6 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
   "endpoint": "http://127.0.0.1:8080/v1",
   "model": "qwen3.8-flash-next-unsloth-ud-q5_k_xl",
   "api_key": null,
-  "reasoning_show": true,
   "language": "auto",
   "web_access": true
 }
@@ -86,7 +90,6 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
 
 - `endpoint` — OpenAI-совместимый base URL (`/v1/chat/completions`).
 - `model` — имя модели у провайдера.
-- `reasoning_show` — показывать `reasoning_content` модели (по умолчанию вкл).
 - `language` — `auto` (из `LANG`/`LC_*`) либо явно (`russian`, `english`, ...).
 - `web_access` — разрешён ли агенту веб-поиск при диагностике (по умолч. вкл).
 
