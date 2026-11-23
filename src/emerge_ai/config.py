@@ -17,6 +17,7 @@ DEFAULTS = {
     "reasoning_show": True,
     "language": "auto",
     "web_access": True,
+    "etc_update_llm": True,
 }
 
 
@@ -32,6 +33,7 @@ class Config:
     reasoning_show: bool = True
     language: str = "auto"
     web_access: bool = True
+    etc_update_llm: bool = True
     source: str | None = field(default=None, compare=False)
 
     @classmethod

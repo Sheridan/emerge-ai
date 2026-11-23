@@ -1,0 +1,4 @@
+PermitRootLogin  Specifies a mode that permits root login: yes | prohibit-password | no.
+Port  Specifies the port number that sshd listens on (default 22).
+PasswordAuthentication  Specifies whether password authentication is allowed (yes/no).
+KexAlgorithms  Specifies the available key exchange algorithms.

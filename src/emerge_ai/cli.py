@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from dataclasses import asdict
 
 from emerge_ai import __version__, hooks, portage_compat, state
@@ -12,6 +13,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
+from emerge_ai import etcupdate
 from emerge_ai.incident import build_incident
 from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan
@@ -104,6 +106,62 @@ def _maybe_agent(run, config_path, agent_fn=None) -> None:
         print(f"emerge-ai: agent unavailable: {exc}", file=sys.stderr)
 
 
+def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_factory=None) -> None:
+    if not run.incident or run.incident.get("class") != "config-protect":
+        return
+    try:
+        cfg = load_config(config_path)
+    except (ConfigError, FileNotFoundError):
+        cfg = Config()
+    paths = etcupdate.detect(run.incident.get("stderr_tail", ""))
+    if not paths:
+        return
+    print("emerge-ai: config-protect detected: " + ", ".join(paths), file=sys.stderr)
+    for newp in paths:
+        try:
+            print(etcupdate.show_diff(newp), file=sys.stderr)
+        except OSError as exc:
+            print(f"emerge-ai: no diff for {newp}: {exc}", file=sys.stderr)
+    if not llm or not cfg.etc_update_llm:
+        print("emerge-ai: etc_update_llm off or raw passthrough — showing diffs only, no actions",
+              file=sys.stderr)
+        return
+    if client_factory is None:
+        client_factory = LLMClient
+    for newp in paths:
+        current = etcupdate.original_of(newp)
+        if not Path(newp).exists():
+            continue
+        try:
+            web = None
+            if cfg.web_access:
+                from emerge_ai.sandbox import Sandbox
+
+                def web(path, _sb=Sandbox()):
+                    r = _sb.web_fetch("https://wiki.gentoo.org/")
+                    return [(r["url"], r["text"])]
+            docs = etcupdate.collect_docs(current, web_fetch=web)
+            decision = etcupdate.llm_decide(client_factory(cfg), newp, current, docs)
+        except Exception as exc:
+            print(f"emerge-ai: etc LLM unavailable: {exc}", file=sys.stderr)
+            continue
+        print(f"emerge-ai: LLM decision: {decision['action']} — {decision.get('reason', '')}",
+              file=sys.stderr)
+        for c in decision.get("citations", []):
+            print(f"emerge-ai:   cite: {c}", file=sys.stderr)
+        try:
+            ans = input_fn("Apply LLM decision [Y/n/c=override action[:file]]? ").strip()
+            decision = etcupdate.parse_override(ans, decision)
+        except EOFError:
+            decision = {"action": "keep-current", "reason": "no input", "citations": ["prompt-eof"]}
+        except ValueError as exc:
+            print(f"emerge-ai: bad override ({exc}); keeping current", file=sys.stderr)
+            decision = {"action": "keep-current", "reason": "bad override", "citations": ["user"]}
+        res = etcupdate.apply_decision(newp, decision, confirm_fn=lambda _p: True)
+        print(f"emerge-ai: etc-update applied={res['applied']} action={res['action']}", file=sys.stderr)
+
+
+
 def main(
     argv: list[str] | None = None,
     emerge_binary: str = "emerge",
@@ -167,6 +225,7 @@ def main(
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
             _maybe_agent(run, config_path, agent_fn)
+            _etc_flow(run, config_path, confirm_fn=lambda _p: False, llm=False)
         return rc
 
     if run.state == state.VERSION_CHECK:
@@ -250,6 +309,7 @@ def main(
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
             _maybe_agent(run, config_path, agent_fn)
+            _etc_flow(run, config_path, confirm_fn=confirm)
         return rc
 
     state.transition(run, state.DONE, runs_dir)

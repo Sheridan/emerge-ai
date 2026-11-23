@@ -1,0 +1,4 @@
+Port 22
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KexAlgorithms sntrup761x25519sha512@openssh.com
