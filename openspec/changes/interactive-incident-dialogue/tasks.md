@@ -19,6 +19,6 @@
 
 ## 4. Интеграция и живой прогон
 
-- [ ] 4.1 e2e-тест на stub-emerge с падающим планом: interactive=True (scripted-ask-канал, monkeypatch isatty) — вопрос показан, выбор «2» дошёл до финального proposal; interactive=False — stdin не читается, proposal содержит `ASSUMPTIONS:`; проверить в `tests/test_cli_integration.py`/`test_replay_e2e.py` паттерном существующих тестов
+- [x] 4.1 e2e-тест на stub-emerge с падающим планом: interactive=True (scripted-ask-канал, monkeypatch isatty) — вопрос показан, выбор «2» дошёл до финального proposal; interactive=False — stdin не читается, proposal содержит `ASSUMPTIONS:`; проверить в `tests/test_cli_integration.py`/`test_replay_e2e.py` паттерном существующих тестов
 - [ ] 4.2 Integration-тест (маркер `integration`) на живом strata-эндпоинте: scripted-ответ на `ask_operator`, модель обязана вызвать инструмент с валидной схемой и встроить ответ в proposal; при отказе модели — лимиты (guard/бюджет) завершают разбор штатно; допуск один retry, как в существующих live-реплеях
 - [ ] 4.3 Прогон полного тестового набора (`pytest`, без `integration`) зелёный; живой ручной сценарий «`emerge-ai -uDN @world` на реальной поломке world, ответить на один вопрос» задокументировать в `LIVE_CHECKS.md`

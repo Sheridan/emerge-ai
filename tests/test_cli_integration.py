@@ -363,3 +363,128 @@ def test_agent_error_red_on_tty_stderr(emerge_stub, ok_compat, monkeypatch, tmp_
     err = tty.getvalue()
     assert "\x1b[31memerge-ai: no LLM endpoint configured" in err
     assert "\x1b[0m" in err
+
+
+# --- e2e: interactive operator question on a failing plan (spec: agent-loop-consent) ---
+
+ASK_QUESTION = {
+    "question": "Which init do you run?",
+    "options": [
+        {"label": "systemd", "consequences": "rebuilds 40 packages"},
+        {"label": "openrc", "consequences": "keeps the queue"},
+    ],
+}
+
+
+class AskWhenOfferedClient:
+    """Scripted model for the agent path: it asks the operator only when the
+    ask_operator tool was handed to it, otherwise it concludes with assumptions."""
+
+    def __init__(self, cfg=None, **kwargs):
+        self.system = ""
+        self.tools: list[str] = []
+        self.chats = 0
+
+    def chat(self, messages, tools=None, temperature=0.2):
+        from emerge_ai.llm import Response, ToolCall
+
+        self.tools = [t["function"]["name"] for t in (tools or [])]
+        if not self.chats:
+            self.system = messages[0]["content"]
+        self.chats += 1
+        answers = [m for m in messages if m.get("role") == "tool"]
+        if answers:
+            payload = json.loads(answers[-1]["content"])
+            chosen = payload.get("choice") or payload.get("free_text") or "nothing"
+            return Response(content=f"PROPOSAL: go ahead, {chosen}")
+        if "ask_operator" in self.tools:
+            return Response(content="", tool_calls=[
+                ToolCall(id="q1", name="ask_operator", arguments=ASK_QUESTION)
+            ])
+        return Response(content="PROPOSAL: pin the slot\nASSUMPTIONS: openrc, no rebuild")
+
+    def render(self, resp, stream=None):
+        if resp.content:
+            print(resp.content, file=stream)
+
+
+@pytest.fixture
+def agent_path(monkeypatch, tmp_path):
+    """Real IncidentAgent on a scripted client, no portage/rules lookup, failing plan."""
+    from emerge_ai import prompts
+
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "core.md").write_text("Be terse.")
+    monkeypatch.setenv("EMERGE_AI_PROMPTS_DIR", str(rules))
+    monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
+    scripted = AskWhenOfferedClient()
+    monkeypatch.setattr(cli, "LLMClient", lambda cfg, **kw: scripted)
+    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_ERR", "slot conflict: dev-util/glslang")
+    return scripted
+
+
+class _TTYStdin:
+    def isatty(self) -> bool:
+        return True
+
+
+def test_e2e_interactive_question_answers_flow_into_proposal(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_path, capsys):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())
+    prompts: list = []
+
+    def _input(prompt=""):
+        prompts.append(prompt)
+        return "2"
+
+    monkeypatch.setattr(builtins, "input", _input)
+    rc = cli.main(
+        ["-a", "sys-apps/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: None,
+    )
+    assert rc == 1  # the plan failure code is not masked by the dialogue
+    assert calls() == [["sys-apps/foo", "--pretend"]]  # nothing was merged
+    err = capsys.readouterr().err
+    assert "Which init do you run?" in err
+    assert "  2. openrc — keeps the queue" in err
+    assert "> openrc — keeps the queue" in err  # the answer is echoed
+    assert "PROPOSAL: go ahead, openrc — keeps the queue" in err  # answer reached the model
+    assert "ask_operator" in agent_path.tools
+
+
+def test_e2e_interactive_free_text_and_quit_stay_in_stderr(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_path, capsys):
+    binary, _ = emerge_stub
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "keep the old slot")
+    rc = cli.main(["-a", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None)
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "PROPOSAL: go ahead, keep the old slot" in err
+    out = capsys.readouterr().out
+    assert "Which init" not in out  # the dialogue never leaks to stdout
+
+
+def test_e2e_pretend_neither_asks_nor_reads_stdin(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_path, capsys):
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")  # -p never spells --pretend, so fail the plain rc
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())  # a TTY must not enable questions under -p
+
+    def _boom(prompt=""):
+        raise AssertionError("stdin must stay untouched in --pretend")
+
+    monkeypatch.setattr(builtins, "input", _boom)
+    rc = cli.main(["-p", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None)
+    assert rc == 1
+    assert "ask_operator" not in agent_path.tools
+    assert "Do not ask the operator" in agent_path.system
+    assert "QUESTION:" not in agent_path.system
+    err = capsys.readouterr().err
+    assert "ASSUMPTIONS: openrc, no rebuild" in err
+    assert "choose, [c] own text" not in err
