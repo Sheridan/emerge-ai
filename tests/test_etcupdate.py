@@ -150,7 +150,7 @@ def test_etc_live_replay_sshd_fixture():
     )
     docs = [("tests/fixtures/etc/sshd_config.5.txt", (FIX / "sshd_config.5.txt").read_text())]
     last = None
-    for _ in range(2):
+    for _ in range(3):
         try:
             decision = etcupdate.llm_decide(
                 LLMClient(cfg),

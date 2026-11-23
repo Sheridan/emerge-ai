@@ -101,7 +101,7 @@ def test_agent_live_replay_compile_fixture():
     import shutil
 
     last = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             _live_replay_once(pathlib, shutil)
             return

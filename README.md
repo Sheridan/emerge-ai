@@ -78,3 +78,18 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
 - `emerge-ai --changelog` — дайджест изменений: локальные новости, GLESA-индекс,
   GitHub releases (`gh_repos`), shallow-клоны (`git_urls`, кэш `/var/cache/emerge-ai/git`);
   при наличии `endpoint` список сокращает LLM до «самого важного», без него — raw-лист.
+
+## Чек-лист ручной верификации на живом хосте (14.2, выполняет пользователь)
+
+Полные команды — в `LIVE_CHECKS.md`; кратко:
+
+- [ ] rest-tier полный цикл без снапшота: `sudo emerge-ai --ask app-misc/<мелкий-пакет>`
+      → план+digest → подтверждение → мердж rc=0 → дайджест запуска, снапшот не создавался
+      (`btrfs subvolume list /.snapshots | grep emerge-ai` пусто).
+- [ ] критичный пакет на btrfs: `sudo emerge-ai --ask sys-apps/<критичный>`
+      → снапшот `/.snapshots/emerge-ai/<run-id>` создался; после успеха — удалён;
+      при откате-сценарии (`Ctrl+C` до завершения) инструкция восстановлена, снапшот жив.
+- [ ] config-protect: пакет с конфигом → показ диффа, LLM-решение с цитатами,
+      .pre-emerge-ai бэкап, ._cfg0000_ удалён только после «y».
+- [ ] `--noninteractive`: rest-tier чинится сам, критичный — отказ с exit 6.
+- [ ] `emerge-ai --changelog` — дайджест без падения при недоступных GitHub/git.
