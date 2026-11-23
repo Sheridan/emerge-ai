@@ -32,9 +32,11 @@ Ebuild лежит в `packaging/app-portage/emerge-ai/` — live-версия (`
 
 После установки:
 
-- создать конфиг `/etc/portage/emerge-ai.json` (`chmod 0600`, root) с
-  `"endpoint"` (OpenAI-compatible base URL) и `"model"`; без endpoint каждый
-  LLM-вызов явно падает, passthrough-`emerge` при этом работает;
+- конфиг `/etc/portage/emerge-ai.json` (`chmod 0600`, root) создаётся автоматически
+  при первой установке, если отсутствует (при обновлениях ваш файл не меняется;
+  шаблон — `/usr/share/emerge-ai/emerge-ai.json.default`); задайте в нём `"endpoint"`
+  (OpenAI-compatible base URL) и `"model"`; без endpoint каждый LLM-вызов явно
+  падает, passthrough-`emerge` при этом работает;
 - prompt-правила читаются из `/usr/share/emerge-ai/prompts` (в dev-checkout —
   `./prompts` от CWD; переопределение — env `EMERGE_AI_PROMPTS_DIR`).
 

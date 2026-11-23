@@ -68,6 +68,14 @@
    пути ниже `packaging/` зеркалят категорию/пакет, копия в оверлей = `cp -r`.
    Секция «Установка (Gentoo)» в README: подключение оверлея, accept_keywords, конфиг,
    ручные live-проверки (дополняет LIVE_CHECKS.md).
+8. **Дефолтный конфиг в составе пакета: шаблон `packaging/emerge-ai.json.default` →
+   `/usr/share/emerge-ai/emerge-ai.json.default`; `pkg_postinst` создаёт
+   `/etc/portage/emerge-ai.json` (0600 root) только если его нет.** Конфиг может
+   содержать `api_key`, поэтому прямой `doins` в `/etc` отклонён: при reinstall без
+   FEATURES=protect он затирал бы пользовательский файл; copy-if-absent в postinst
+   не перезаписывает существующий и осознанно оставляет конфиг при unmerge (файл
+   вне CONTENTS). Пустые `endpoint`/`model` соответствуют дизайну: `require_endpoint`
+   падает явно, а не молча.
 
 ## Risks / Trade-offs
 
@@ -85,9 +93,9 @@
 
 ## Migration Plan
 
-Обычная установка пакета; откат = `emerge --unmerge app-portage/emerge-ai` (пакет ничего
-не пишет в /etc сам). Для checkout-пользователей поведение не меняется (dev-раскладка
-в приоритете).
+Обычная установка пакета; откат = `emerge --unmerge app-portage/emerge-ai` (конфиг
+создаётся postinst только при отсутствии и при unmerge осознанно остаётся). Для
+checkout-пользователей поведение не меняется (dev-раскладка в приоритете).
 
 ## Open Questions
 

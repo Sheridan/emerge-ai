@@ -18,9 +18,13 @@
       `IUSE="test"`, `RDEPEND="sys-apps/portage sys-apps/util-linux"`, `BDEPEND` pytest на
       `test?`; `src_install`: `python_install` + `insinto /usr/share/emerge-ai` +
       `doins -r prompts/.`; `src_test`: `python_test -- -m "not integration"`;
-      `pkg_postinst`: конфиг `/etc/portage/emerge-ai.json` (0600, обязательный `endpoint`) и
+      `      pkg_postinst`: конфиг `/etc/portage/emerge-ai.json` (0600, обязательный `endpoint`) и
       опциональные `sys-fs/btrfs-progs`/`app-portage/genlop`/`dev-vcs/git`; проверка — из
       задачи 3.1
+- [x] 2.2 Дефолтный конфиг в составе пакета: `packaging/emerge-ai.json.default` ставится в
+      `/usr/share/emerge-ai/emerge-ai.json.default`; `pkg_postinst` при отсутствии создаёт
+      `/etc/portage/emerge-ai.json` (0600 root) из шаблона, существующий не трогает;
+      проверка — pkgcheck, шаблон парсится `load_config`
 
 ## 3. Верификация без мутаций живой системы
 

@@ -46,8 +46,12 @@ sudo emerge-ai -a sys-apps/baselayout
 ```bash
 # фактическая установка (live-ebuild, ~1-2 мин на git clone)
 sudo emerge -1av app-portage/emerge-ai
-#   → в конце вывода pkg_postinst: инструкция про
-#     /etc/portage/emerge-ai.json (0600, endpoint) и опциональные инструменты
+#   → в конце вывода pkg_postinst: сообщение про созданный/нетронутый
+#     /etc/portage/emerge-ai.json и опциональные инструменты
+
+# конфиг по умолчанию создан при первой установке
+ls -l /etc/portage/emerge-ai.json
+#   → -rw------- root root (reinstall существующий конфиг не затирает)
 
 # CLI работает из корня ФС (вне checkout)
 cd / && emerge-ai --version
