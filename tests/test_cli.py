@@ -212,3 +212,132 @@ def test_maybe_agent_gated_on_show_reasoning(monkeypatch, tmp_path):
     assert captured[-1] == {"show_reasoning": False}
     cli._maybe_agent(run, str(cfg), show_reasoning=True)
     assert captured[-1] == {"show_reasoning": True}
+
+
+# --- interactive operator question channel reaches the agent (spec: agent-loop-consent) ---
+
+
+class _TTYStdin:
+    def isatty(self) -> bool:
+        return True
+
+
+class _PipeStdin:
+    def isatty(self) -> bool:
+        return False
+
+
+@pytest.fixture
+def agent_spy(tmp_path):
+    """Endpoint configured; fake agent records (incident class, interactive flag)."""
+    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    seen: list = []
+
+    def agent(incident, interactive=None):
+        seen.append((incident["class"], interactive))
+        return "PROPOSAL: pin glslang"
+
+    return seen, agent
+
+
+def test_agent_gets_no_questions_in_pretend(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_spy):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())  # a TTY does not matter under -p
+    seen, agent = agent_spy
+    rc = cli.main(["-p", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, agent_fn=agent)
+    assert rc == 1
+    assert seen == [("plan-failed", False)]
+
+
+def test_agent_gets_no_questions_when_noninteractive(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_spy):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())
+    seen, agent = agent_spy
+    rc = cli.main(["--noninteractive", "-p", "sys-apps/foo"], emerge_binary=binary,
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: None, agent_fn=agent)
+    assert rc == 1
+    assert seen == [("plan-failed", False)]
+
+
+def test_agent_gets_no_questions_without_tty(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_spy):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setattr(cli.sys, "stdin", _PipeStdin())
+    seen, agent = agent_spy
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, agent_fn=agent)
+    assert rc == 1
+    assert seen and seen[0][1] is False
+
+
+def test_agent_can_ask_on_tty_without_flags(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_spy):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())
+    seen, agent = agent_spy
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, agent_fn=agent)
+    assert rc == 1
+    assert seen and seen[0][1] is True  # merge-fail without -a
+
+
+def test_agent_can_ask_after_failed_ask_merge(emerge_stub, ok_compat, monkeypatch, tmp_path, agent_spy):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "y")
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())
+    seen, agent = agent_spy
+    rc = cli.main(["-a", "app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, agent_fn=agent)
+    assert rc == 1
+    assert seen and seen[-1][1] is True  # merge-fail after -a
+
+
+def test_legacy_one_argument_agent_fn_still_works_and_never_reads_stdin(
+    emerge_stub, ok_compat, monkeypatch, tmp_path, capsys
+):
+    binary, _ = emerge_stub
+    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())
+
+    def _boom(prompt=""):
+        raise AssertionError("plan-failed with -p must not read stdin")
+
+    monkeypatch.setattr(builtins, "input", _boom)
+    seen = []
+
+    def legacy_agent(incident):
+        seen.append(incident)
+        return "PROPOSAL: legacy"
+
+    rc = cli.main(["-p", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, agent_fn=legacy_agent)
+    assert rc == 1
+    assert seen and seen[0]["class"] == "plan-failed"
+    assert "PROPOSAL: legacy" in capsys.readouterr().err
+
+
+def test_call_agent_fn_adapts_signature():
+    calls = []
+
+    def legacy(incident):
+        calls.append(("legacy",))
+        return "p1"
+
+    def modern(incident, interactive=False):
+        calls.append(("modern", interactive))
+        return "p2"
+
+    def star(incident, **kw):
+        calls.append(("star", kw.get("interactive")))
+        return "p3"
+
+    assert cli._call_agent_fn(legacy, {"class": "x"}, True) == "p1"
+    assert cli._call_agent_fn(modern, {"class": "x"}, True) == "p2"
+    assert cli._call_agent_fn(star, {"class": "x"}, False) == "p3"
+    assert calls == [("legacy",), ("modern", True), ("star", False)]

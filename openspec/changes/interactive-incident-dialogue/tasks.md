@@ -14,8 +14,8 @@
 
 ## 3. Проброс интерактивности из CLI
 
-- [ ] 3.1 В `cli.main` вычислить `interactive = not pretend and not mode.noninteractive and sys.stdin.isatty()` и передать в `_maybe_agent` (новый именованный параметр с обратимым дефолтом) и далее в `IncidentAgent.propose` во всех трёх ветках сбоя (merge-fail без `-a`, plan-failed, merge-fail после `-a`); тесты в `tests/test_cli.py`: fake `agent_fn` фиксирует `interactive=False` при `-p`, при `--noninteractive` и при не-TTY stdin; `interactive=True` при monkeypatch-isatty без `-p`
-- [ ] 3.2 Дефолтный `IncidentAgent`-путь `_maybe_agent` принимает interactive и не ломает существующий seam `agent_fn(incident)` (обратная совместимость сигнатуры); тест: вызов со старым одноаргументным `agent_fn` проходит как раньше, `plan-failed` с `-p` по-прежнему выходит сразу после proposal (ни одного чтения stdin — проверить monkeypatch `input`, бросающим AssertionError)
+- [x] 3.1 В `cli.main` вычислить `interactive = not pretend and not mode.noninteractive and sys.stdin.isatty()` и передать в `_maybe_agent` (новый именованный параметр с обратимым дефолтом) и далее в `IncidentAgent.propose` во всех трёх ветках сбоя (merge-fail без `-a`, plan-failed, merge-fail после `-a`); тесты в `tests/test_cli.py`: fake `agent_fn` фиксирует `interactive=False` при `-p`, при `--noninteractive` и при не-TTY stdin; `interactive=True` при monkeypatch-isatty без `-p`
+- [x] 3.2 Дефолтный `IncidentAgent`-путь `_maybe_agent` принимает interactive и не ломает существующий seam `agent_fn(incident)` (обратная совместимость сигнатуры); тест: вызов со старым одноаргументным `agent_fn` проходит как раньше, `plan-failed` с `-p` по-прежнему выходит сразу после proposal (ни одного чтения stdin — проверить monkeypatch `input`, бросающим AssertionError)
 
 ## 4. Интеграция и живой прогон
 

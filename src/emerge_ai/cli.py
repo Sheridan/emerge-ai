@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -79,7 +80,32 @@ def _default_protect(run, plan) -> Protection:
     return rollback_mod.protect(run.run_id, plan, contents_fn=portage_compat.vdb_contents)
 
 
-def _maybe_agent(run, config_path, agent_fn=None, show_reasoning=False) -> str | None:
+def _stdin_is_tty() -> bool:
+    """Interactive means a real terminal on stdin; captured or closed stdin is not."""
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def _call_agent_fn(agent_fn, incident: dict, interactive: bool):
+    """Call the agent seam. Older agent_fn take only the incident; newer ones may
+    accept an `interactive` keyword — the signature stays backward compatible."""
+    try:
+        params = inspect.signature(agent_fn).parameters
+    except (TypeError, ValueError):  # builtins, functools wrappers without a signature
+        params = {}
+    takes_interactive = "interactive" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    if takes_interactive:
+        return agent_fn(incident, interactive=interactive)
+    return agent_fn(incident)
+
+
+def _maybe_agent(
+    run, config_path, agent_fn=None, show_reasoning=False, interactive: bool = False
+) -> str | None:
     if not run.incident:
         return None
     try:
@@ -93,7 +119,7 @@ def _maybe_agent(run, config_path, agent_fn=None, show_reasoning=False) -> str |
           file=sys.stderr)
     try:
         if agent_fn is not None:
-            proposal = agent_fn(run.incident)
+            proposal = _call_agent_fn(agent_fn, run.incident, interactive)
         else:
             from emerge_ai.agent import IncidentAgent
             from emerge_ai.prompts import collect_context
@@ -104,7 +130,9 @@ def _maybe_agent(run, config_path, agent_fn=None, show_reasoning=False) -> str |
                 client, context=collect_context(info, cfg.language)
             )
             proposal = agent.propose(
-                run.incident, render_to=sys.stderr if show_reasoning else None
+                run.incident,
+                render_to=sys.stderr if show_reasoning else None,
+                interactive=interactive,
             ).proposal
         print(ui.info("agent proposal:"), file=sys.stderr)
         ui.paint_llm_block(proposal, cfg.llm_colors, sys.stderr)
@@ -276,6 +304,8 @@ def main(
 
     pretend = flag_present(emerge_args, PRETEND_FLAGS)
     ask = flag_present(emerge_args, ASK_FLAGS)
+    # The operator can answer only here: -p and --noninteractive stay question-free.
+    interactive = not pretend and not mode.noninteractive and _stdin_is_tty()
 
     if not pretend and not ask:
         _advance_to_merge(run, runs_dir)
@@ -284,7 +314,9 @@ def main(
             run.incident = build_incident(rc, output, emerge_args)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
-            run.agent_proposal = _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose)
+            run.agent_proposal = _maybe_agent(
+                run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
+            )
             _etc_flow(run, config_path, confirm_fn=lambda _p: False, llm=False)
         else:
             _post_run_digest(run, output, config_path, runs_dir)
@@ -304,7 +336,9 @@ def main(
         incident["class"] = "plan-failed"
         run.incident = incident
         state.transition(run, state.INCIDENT, runs_dir)
-        run.agent_proposal = _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose)
+        run.agent_proposal = _maybe_agent(
+            run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
+        )
         state.save_run(run, runs_dir)
         return rc
 
@@ -381,7 +415,9 @@ def main(
                 print(ui.ok(line), file=sys.stderr)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
-            run.agent_proposal = _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose)
+            run.agent_proposal = _maybe_agent(
+                run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
+            )
             _etc_flow(run, config_path, confirm_fn=confirm, show_reasoning=verbose)
         else:
             _post_run_digest(run, output, config_path, runs_dir)
