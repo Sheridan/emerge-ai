@@ -21,7 +21,7 @@
 
 ## 5. Интеграционная проверка
 
-- [ ] 5.1 Полный `pytest` — зелено; `openspec validate gate-reasoning-on-verbose --strict` без ошибок; сценарии дельты config-prompts сверены с тестами (каждый сценарий → тест, соответствие в commit message)
+- [x] 5.1 Полный `pytest` — зелено; `openspec validate gate-reasoning-on-verbose --strict` без ошибок; сценарии дельты config-prompts сверены с тестами (каждый сценарий → тест, соответствие в commit message)
 - [ ] 5.2 Ручная smoke без live-мутаций: конфиг со `"reasoning_show": true` → warning про `-v/--verbose`; `emerge-ai -p ...` и `emerge-ai -pv ...` при наличии эндпоинта — reasoning виден только во втором
 
 ## Workflow follow-up
