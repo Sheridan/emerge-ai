@@ -13,9 +13,9 @@
 
 ## 3. Хелперы main() и типизация (cli.py, state.py)
 
-- [ ] 3.1 Вынести мета-флаги в `_meta_command(argv) -> int | None` (docstring: правило «только первый аргумент»), `main()` вызывает её; прогнать `pytest tests/test_cli.py -k "version or help"` — зелено
-- [ ] 3.2 **Фикс resume**: в `_resolve_resume(...)` при отсутствии незавершённого run'а оставлять `--resume` в emerge_args (ветка «starting fresh» не вырезает флаг); сообщения `resuming`/`starting fresh` внутрь хелпера; новый регрессионный тест в `tests/test_cli_integration.py`: runs-каталог пуст → `cli.main(["--resume"])` → emerge-stub вызван с `["--resume"]`, создан один run, rc=stub (красный до 3.2, зелёный после)
-- [ ] 3.3 Ужесточить `state.new_run(argv, mode: Mode)`: удалить dict-ветку и локальный импорт; перевести `tests/test_cli_integration.py:57,141` на `Mode(...)`; прогнать `pytest tests/test_state.py tests/test_cli_integration.py` — зелено
+- [x] 3.1 Вынести мета-флаги в `_meta_command(argv) -> int | None` (docstring: правило «только первый аргумент»), `main()` вызывает её; прогнать `pytest tests/test_cli.py -k "version or help"` — зелено
+- [x] 3.2 **Фикс resume**: в `_resolve_resume(...)` при отсутствии незавершённого run'а оставлять `--resume` в emerge_args (ветка «starting fresh» не вырезает флаг); сообщения `resuming`/`starting fresh` внутрь хелпера; новый регрессионный тест в `tests/test_cli_integration.py`: runs-каталог пуст → `cli.main(["--resume"])` → emerge-stub вызван с `["--resume"]`, создан один run, rc=stub (красный до 3.2, зелёный после)
+- [x] 3.3 Ужесточить `state.new_run(argv, mode: Mode)`: удалить dict-ветку и локальный импорт; перевести `tests/test_cli_integration.py:57,141` на `Mode(...)`; прогнать `pytest tests/test_state.py tests/test_cli_integration.py` — зелено
 
 ## 4. Интеграционная проверка
 

@@ -165,6 +165,32 @@ def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_
 
 
 
+def _resolve_resume(emerge_args: list[str], mode, runs_dir) -> tuple[state.RunState, list[str]]:
+    """Handle --resume, returning (run, emerge_args).
+
+    An incomplete emerge-ai run is continued and --resume is stripped from the
+    emerge argv. Without such a run the flag stays put: emerge resumes its own
+    interrupted merge, emerge-ai just registers a regular run around it.
+    """
+    if "--resume" not in emerge_args:
+        run = state.new_run(emerge_args, mode)
+        state.save_run(run, runs_dir)
+        return run, emerge_args
+    run = state.latest_incomplete(runs_dir)
+    if run is None:
+        print("emerge-ai: --resume: no incomplete emerge-ai run; passing --resume to emerge",
+              file=sys.stderr)
+        run = state.new_run(emerge_args, mode)
+        state.save_run(run, runs_dir)
+        return run, emerge_args
+    print(
+        f"emerge-ai: resuming run {run.run_id} (state {run.state}"
+        + (f", incident: {run.incident['class']})" if run.incident else ")"),
+        file=sys.stderr,
+    )
+    return run, [a for a in emerge_args if a != "--resume"]
+
+
 def _post_run_digest(run, output, config_path, runs_dir) -> None:
     try:
         cfg = load_config(config_path)
@@ -187,6 +213,24 @@ def _changelog_mode(config_path) -> int:
     return 0
 
 
+def _meta_command(argv: list[str]) -> int | None:
+    """Handle emerge-ai's own meta commands: --version/-V and --help.
+
+    Rule: only argv[0] selects an emerge-ai mode; in any other position these
+    strings are ordinary emerge arguments and are passed through. Runs before
+    the compat gate: help and version must work on any host.
+    """
+    if argv and argv[0] in ("--version", "-V"):
+        text, code = _version_text()
+        print(text, end="")
+        return code
+    if argv and argv[0] == "--help":
+        print(OWN_FLAG_HELP)
+        print("Run 'emerge-ai -h' (or any emerge option) for emerge's own help.")
+        return 0
+    return None
+
+
 def main(
     argv: list[str] | None = None,
     emerge_binary: str = "emerge",
@@ -204,15 +248,9 @@ def main(
     runs_dir = runs_dir or os.environ.get("EMERGE_AI_RUNS_DIR") or state.RUNS_DIR
     tiers_cache = os.environ.get("EMERGE_AI_TIERS_CACHE") or tiers_cache
 
-    if argv and argv[0] in ("--version", "-V"):
-        text, code = _version_text()
-        print(text, end="")
-        return code
-
-    if argv and argv[0] == "--help":
-        print(OWN_FLAG_HELP)
-        print("Run 'emerge-ai -h' (or any emerge option) for emerge's own help.")
-        return 0
+    meta = _meta_command(argv)
+    if meta is not None:
+        return meta
 
     mode, emerge_args = parse_own_flags(argv)
 
@@ -223,24 +261,7 @@ def main(
     if blocked is not None:
         return blocked
 
-    resuming = "--resume" in emerge_args
-    if resuming:
-        emerge_args = [a for a in emerge_args if a != "--resume"]
-    run = state.latest_incomplete(runs_dir) if resuming else None
-    if resuming:
-        if run is None:
-            print("emerge-ai: --resume: no incomplete emerge-ai run; starting fresh", file=sys.stderr)
-            run = state.new_run(emerge_args, mode)
-            state.save_run(run, runs_dir)
-        else:
-            print(
-                f"emerge-ai: resuming run {run.run_id} (state {run.state}"
-                + (f", incident: {run.incident['class']})" if run.incident else ")"),
-                file=sys.stderr,
-            )
-    else:
-        run = state.new_run(emerge_args, mode)
-        state.save_run(run, runs_dir)
+    run, emerge_args = _resolve_resume(emerge_args, mode, runs_dir)
 
     pretend = flag_present(emerge_args, PRETEND_FLAGS)
     ask = flag_present(emerge_args, ASK_FLAGS)

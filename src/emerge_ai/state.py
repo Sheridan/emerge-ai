@@ -8,6 +8,8 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
+from emerge_ai.flags import Mode
+
 RUNS_DIR = "/var/lib/emerge-ai/runs"
 
 VERSION_CHECK = "VERSION_CHECK"
@@ -53,13 +55,11 @@ class RunState:
         return self.state == DONE
 
 
-def new_run(argv: list[str], mode) -> RunState:
-    from emerge_ai.flags import Mode
-
+def new_run(argv: list[str], mode: Mode) -> RunState:
     return RunState(
         run_id=uuid.uuid4().hex[:12],
         argv=list(argv),
-        mode=asdict(mode) if isinstance(mode, Mode) else dict(mode),
+        mode=asdict(mode),
     )
 
 

@@ -4,6 +4,7 @@ import json
 import pytest
 
 from emerge_ai import cli, state
+from emerge_ai.flags import Mode
 from emerge_ai.plan import Plan, PlanEntry
 from emerge_ai.rollback import Protection
 
@@ -52,9 +53,23 @@ def test_world_mass_doctor_warns(emerge_stub, ok_compat, monkeypatch, tmp_path, 
     assert "doctor" in err and "sys-kernel/gentoo-sources-6.6" in err
 
 
+def test_resume_without_run_passes_flag_to_emerge(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, calls = emerge_stub
+    rc = cli.main(
+        ["--resume"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: None,
+    )
+    assert rc == 0
+    assert calls() == [["--resume"]]  # emerge keeps its own resume semantics
+    assert len(list(tmp_path.glob("*.json"))) == 1  # a fresh run is recorded
+    assert "passing --resume to emerge" in capsys.readouterr().err
+
+
 def test_resume_reuses_incomplete_run_context(emerge_stub, ok_compat, tmp_path, capsys):
     binary, calls = emerge_stub
-    run = state.new_run(["--resume"], {"noninteractive": True})
+    run = state.new_run(["--resume"], Mode(noninteractive=True))
     run.state = state.INCIDENT
     run.incident = {"class": "block"}
     state.save_run(run, runs_dir=tmp_path)
@@ -138,7 +153,7 @@ def test_resume_reuses_existing_recovery_point(emerge_stub, ok_compat, tmp_path,
     b_input = b.input
     try:
         b.input = input_y
-        run = state.new_run(["--resume", "-a", "sys-apps/x"], {"noninteractive": False})
+        run = state.new_run(["--resume", "-a", "sys-apps/x"], Mode())
         run.state = state.INCIDENT
         run.protection = {"snapshot": "/snap/keep", "archive": None, "failed": False}
         state.save_run(run, runs_dir=tmp_path)
