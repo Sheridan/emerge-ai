@@ -36,3 +36,12 @@ def emerge_stub(tmp_path, monkeypatch):
         return [line.split() for line in log.read_text().splitlines()]
 
     return str(path), calls
+
+
+@pytest.fixture
+def jail_log(tmp_path):
+    root = tmp_path / "jail"
+    root.mkdir()
+    log = root / "build.log"
+    log.write_text("noise\nerror: something\n")
+    return str(log)

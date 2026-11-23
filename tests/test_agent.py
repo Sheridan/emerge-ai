@@ -24,9 +24,11 @@ BUILD_LOG = (
 class ScriptedClient:
     def __init__(self, steps):
         self.steps = list(steps)
+        self.messages = []
         self.seen_tool_results = []
 
     def chat(self, messages, tools=None, temperature=0.2):
+        self.messages = messages
         for m in messages:
             if m.get("role") == "tool":
                 self.seen_tool_results.append(m["content"])
