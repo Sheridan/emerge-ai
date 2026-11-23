@@ -5,9 +5,19 @@ from emerge_ai.config import Config, ConfigError, load_config, require_endpoint
 
 def test_defaults():
     cfg = Config()
-    assert cfg.reasoning_show is True
+    assert not hasattr(cfg, "reasoning_show")
     assert cfg.language == "auto"
     assert cfg.web_access is True
+
+
+def test_removed_reasoning_show_key_warns_with_pointer(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"endpoint": "http://x/v1", "reasoning_show": true}')
+    cfg = load_config(p)
+    assert cfg.endpoint == "http://x/v1"  # startup did not break
+    err = capsys.readouterr().err
+    assert "reasoning_show" in err and "-v/--verbose" in err
+    assert "unknown key" not in err  # targeted warning instead of the generic one
 
 
 def test_missing_file_gives_defaults(tmp_path):

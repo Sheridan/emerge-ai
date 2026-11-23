@@ -8,7 +8,7 @@
 
 ## 2. Конфиг: удаление reasoning_show (config.py)
 
-- [ ] 2.1 Убрать `reasoning_show` из `DEFAULTS` и `Config`; `_REMOVED_KEYS = {"reasoning_show": ...}` с адресным warning в `from_dict` (общий unknown-key для него не печатается); обновить `tests/test_config.py`: дефолт без ключа + тест «reasoning_show в конфиге → warning содержит -v/--verbose, запуск не упал»; `pytest tests/test_config.py` — зелено
+- [x] 2.1 Убрать `reasoning_show` из `DEFAULTS` и `Config`; `_REMOVED_KEYS = {"reasoning_show": ...}` с адресным warning в `from_dict` (общий unknown-key для него не печатается); обновить `tests/test_config.py`: дефолт без ключа + тест «reasoning_show в конфиге → warning содержит -v/--verbose, запуск не упал»; `pytest tests/test_config.py` — зелено
 
 ## 3. CLI: verbose-детект и проброс (cli.py)
 

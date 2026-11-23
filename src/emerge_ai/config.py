@@ -14,7 +14,6 @@ DEFAULTS = {
     "endpoint": None,
     "model": None,
     "api_key": None,
-    "reasoning_show": True,
     "language": "auto",
     "web_access": True,
     "etc_update_llm": True,
@@ -22,6 +21,11 @@ DEFAULTS = {
     "gh_repos": [],
     "git_urls": [],
     "news_dir": "/var/lib/eselect-news/news",
+}
+
+# Keys accepted in old configs, now gone: key -> where it went.
+_REMOVED_KEYS = {
+    "reasoning_show": "was removed; reasoning output is now controlled by the emerge flag -v/--verbose",
 }
 
 
@@ -34,7 +38,6 @@ class Config:
     endpoint: str | None = None
     model: str | None = None
     api_key: str | None = None
-    reasoning_show: bool = True
     language: str = "auto"
     web_access: bool = True
     etc_update_llm: bool = True
@@ -49,9 +52,12 @@ class Config:
         if warn is None:
             def warn(msg: str) -> None:
                 print(msg, file=sys.stderr)
-        unknown = set(data) - set(DEFAULTS)
+        unknown = set(data) - set(DEFAULTS) - set(_REMOVED_KEYS)
         for key in sorted(unknown):
             warn(f"emerge-ai: config: ignoring unknown key {key!r}")
+        for key in sorted(_REMOVED_KEYS):
+            if key in data:
+                warn(f"emerge-ai: config: key {key!r} {_REMOVED_KEYS[key]}")
         kwargs = {k: data[k] for k in DEFAULTS if k in data}
         return cls(source=source, **kwargs)
 
