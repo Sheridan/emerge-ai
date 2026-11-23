@@ -32,6 +32,70 @@ def test_rules_loaded_sorted(rules_dir):
     assert "## 00-canary" in rules
 
 
+def _mk_rules(root, text):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "00-x.md").write_text(text)
+    return root
+
+
+def _no_env(monkeypatch):
+    monkeypatch.delenv(prompts.ENV_RULES_DIR, raising=False)
+
+
+def test_rules_dir_env_overrides_everything(tmp_path, monkeypatch):
+    env_dir = _mk_rules(tmp_path / "env", "env rule")
+    dev = _mk_rules(tmp_path / "dev", "dev rule")
+    inst = _mk_rules(tmp_path / "inst", "inst rule")
+    monkeypatch.setenv(prompts.ENV_RULES_DIR, str(env_dir))
+    monkeypatch.setattr(prompts, "FALLBACK_RULES_DIR", str(dev))
+    monkeypatch.setattr(prompts, "INSTALL_RULES_DIR", str(inst))
+    assert prompts.rules_dir() == env_dir
+    assert "env rule" in prompts.load_rules()
+
+
+def test_rules_dir_prefers_dev_checkout(tmp_path, monkeypatch):
+    dev = _mk_rules(tmp_path / "dev", "dev rule")
+    inst = _mk_rules(tmp_path / "inst", "inst rule")
+    _no_env(monkeypatch)
+    monkeypatch.setattr(prompts, "FALLBACK_RULES_DIR", str(dev))
+    monkeypatch.setattr(prompts, "INSTALL_RULES_DIR", str(inst))
+    assert prompts.rules_dir() == dev
+    assert "dev rule" in prompts.load_rules()
+
+
+def test_rules_dir_falls_back_to_install_dir(tmp_path, monkeypatch):
+    inst = _mk_rules(tmp_path / "inst", "inst rule")
+    _no_env(monkeypatch)
+    monkeypatch.setattr(prompts, "FALLBACK_RULES_DIR", str(tmp_path / "missing-dev"))
+    monkeypatch.setattr(prompts, "INSTALL_RULES_DIR", str(inst))
+    assert prompts.rules_dir() == inst
+    assert "inst rule" in prompts.load_rules()
+
+
+def test_rules_dir_env_set_even_if_missing(tmp_path, monkeypatch):
+    dev = _mk_rules(tmp_path / "dev", "dev rule")
+    missing = tmp_path / "missing-env"
+    monkeypatch.setenv(prompts.ENV_RULES_DIR, str(missing))
+    monkeypatch.setattr(prompts, "FALLBACK_RULES_DIR", str(dev))
+    assert prompts.rules_dir() == missing
+    with pytest.raises(FileNotFoundError, match="no prompt rules found") as exc:
+        prompts.load_rules()
+    assert str(missing) in str(exc.value)
+    assert str(dev) not in str(exc.value)
+
+
+def test_rules_error_lists_all_checked_dirs(tmp_path, monkeypatch):
+    missing_dev = tmp_path / "missing-dev"
+    missing_inst = tmp_path / "missing-inst"
+    _no_env(monkeypatch)
+    monkeypatch.setattr(prompts, "FALLBACK_RULES_DIR", str(missing_dev))
+    monkeypatch.setattr(prompts, "INSTALL_RULES_DIR", str(missing_inst))
+    with pytest.raises(FileNotFoundError) as exc:
+        prompts.load_rules()
+    assert str(missing_dev) in str(exc.value)
+    assert str(missing_inst) in str(exc.value)
+
+
 def test_context_extracts_profile_and_use():
     info = (
         "Portage 3.0.82\nProfile: default/linux/amd64/23.0\n"

@@ -11,13 +11,22 @@ from pathlib import Path
 GENERATED_DIR = "/var/lib/emerge-ai/prompts"
 ENV_RULES_DIR = "EMERGE_AI_PROMPTS_DIR"
 FALLBACK_RULES_DIR = "prompts"
+INSTALL_RULES_DIR = "/usr/share/emerge-ai/prompts"
+
+
+def rules_candidates() -> list[Path]:
+    env = os.environ.get(ENV_RULES_DIR)
+    if env:
+        return [Path(env)]
+    return [Path(FALLBACK_RULES_DIR), Path(INSTALL_RULES_DIR)]
 
 
 def rules_dir() -> Path:
-    env = os.environ.get(ENV_RULES_DIR)
-    if env:
-        return Path(env)
-    return Path(FALLBACK_RULES_DIR)
+    candidates = rules_candidates()
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[-1]
 
 
 def load_rules(directory: Path | None = None) -> str:
@@ -26,6 +35,11 @@ def load_rules(directory: Path | None = None) -> str:
     for md in sorted(d.rglob("*.md")):
         parts.append(f"## {md.stem}\n{md.read_text().strip()}")
     if not parts:
+        if directory is None:
+            checked = ", ".join(str(c) for c in rules_candidates())
+            raise FileNotFoundError(
+                f"emerge-ai: no prompt rules found; checked: {checked}"
+            )
         raise FileNotFoundError(f"emerge-ai: no prompt rules found in {d}")
     return "\n\n".join(parts)
 

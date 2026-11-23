@@ -28,7 +28,8 @@ sudo emerge-ai -a sys-apps/baselayout
 
 ## Стенд оверлея (группа 11, тесты test_overlay_live.py)
 
-Требуются на машине (уже созданы):
+Требуются на машине (пересоздаются инструментом/тестами при необходимости,
+в этой сессии репозитории удалены):
 - `/etc/portage/repos.conf/emerge-ai-test.conf` (prio 99) и `emerge-ai-test-base.conf` (prio 50)
 - `/var/db/repos/emerge-ai-test{,-base}` (sheridan:portage) c `profiles/repo_name`,
   `metadata/layout.conf` (masters=gentoo), `profiles/categories` (`ea-test`)
@@ -37,3 +38,22 @@ sudo emerge-ai -a sys-apps/baselayout
 
 Проверка: `ACCEPT_KEYWORDS="~amd64" emerge -p -v "=ea-test/foo-1.0"` →
 `[ebuild N ] ea-test/foo-1.0::emerge-ai-test`.
+
+## Установка из ebuild (add-gentoo-ebuild, выполняет пользователь)
+
+Оверлей настроен по README («Установка (Gentoo, личный оверлей)»).
+
+```bash
+# фактическая установка (live-ebuild, ~1-2 мин на git clone)
+sudo emerge -1av app-portage/emerge-ai
+#   → в конце вывода pkg_postinst: инструкция про
+#     /etc/portage/emerge-ai.json (0600, endpoint) и опциональные инструменты
+
+# CLI работает из корня ФС (вне checkout)
+cd / && emerge-ai --version
+#   → версия emerge-ai рядом с версией Portage
+
+# prompt-правила резолвятся из /usr/share/emerge-ai/prompts
+cd / && python -c "from emerge_ai.prompts import load_rules; print(len(load_rules()))"
+#   → число > 0
+```

@@ -5,6 +5,39 @@ AI-ассистированная обёртка над Gentoo `emerge`: исп�
 человека на мутации системы и путём отката. Версия проекта жёстко
 привязана к `sys-apps/portage` (совместимость по major.minor).
 
+## Установка (Gentoo, личный оверлей)
+
+Ebuild лежит в `packaging/app-portage/emerge-ai/` — live-версия (`9999`,
+`distutils-r1` + `git-r3`, один `PYTHON_SINGLE_TARGET` из профиля).
+
+1. Скопировать категорию в личный оверлей:
+
+   ```
+   mkdir -p <overlay>/app-portage
+   cp -r packaging/app-portage/emerge-ai <overlay>/app-portage/
+   ```
+
+2. Сгенерировать Manifest (портage маскирует пакеты локального репозитория
+   без него): `ebuild <overlay>/app-portage/emerge-ai/emerge-ai-9999.ebuild manifest`
+
+3. Разрешить live-версию (в ebuild нет KEYWORDS):
+
+   ```
+   echo "app-portage/emerge-ai **" | sudo tee /etc/portage/package.accept_keywords/emerge-ai
+   ```
+
+4. Установить: `sudo emerge -1av app-portage/emerge-ai`
+   (рантайм-зависимости `sys-apps/portage` и `sys-apps/util-linux` подтянутся
+   автоматически; `sys-fs/btrfs-progs`/`app-portage/genlop` — опциональны).
+
+После установки:
+
+- создать конфиг `/etc/portage/emerge-ai.json` (`chmod 0600`, root) с
+  `"endpoint"` (OpenAI-compatible base URL) и `"model"`; без endpoint каждый
+  LLM-вызов явно падает, passthrough-`emerge` при этом работает;
+- prompt-правила читаются из `/usr/share/emerge-ai/prompts` (в dev-checkout —
+  `./prompts` от CWD; переопределение — env `EMERGE_AI_PROMPTS_DIR`).
+
 ## Запуск
 
 ```
