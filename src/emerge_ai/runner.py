@@ -43,13 +43,20 @@ def confirm(prompt: str = "Proceed? [y/N] ", stream=sys.stdin) -> bool:
 
 
 def _flag_kinds(flags: tuple[str, ...]) -> tuple[set[str], set[str]]:
+    """Split flag specs into two kinds:
+
+    longs  - whole long options to match exactly ("--ask");
+    shorts - single letters that may hide inside a short-option cluster
+             ("-av" carries "a").
+    """
     longs = {f for f in flags if f.startswith("--")}
     shorts = {f[1] for f in flags if f.startswith("-") and not f.startswith("--")}
     return longs, shorts
 
 
 def flag_present(emerge_args: list[str], flags: tuple[str, ...]) -> bool:
-    """True if a flag appears standalone or inside a short-option cluster (-av)."""
+    """True if a flag appears standalone, as a long option, or inside a
+    short-option cluster (-av counts as -a)."""
     longs, shorts = _flag_kinds(flags)
     for a in emerge_args:
         if a in longs:
@@ -60,7 +67,8 @@ def flag_present(emerge_args: list[str], flags: tuple[str, ...]) -> bool:
 
 
 def drop_flags(emerge_args: list[str], flags: tuple[str, ...]) -> list[str]:
-    """Remove flags everywhere, including from short-option clusters (-av -> -v)."""
+    """Remove flags everywhere: whole long options, and letters extracted
+    from short-option clusters (-av -> -v); a cluster left empty is dropped."""
     longs, shorts = _flag_kinds(flags)
     out: list[str] = []
     for a in emerge_args:

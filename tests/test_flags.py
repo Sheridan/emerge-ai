@@ -63,3 +63,9 @@ def test_help_lists_every_own_flag():
     help_lines = {ln.strip().split()[0] for ln in OWN_FLAG_HELP.splitlines() if ln.strip()}
     for flag in OWN_FLAGS:
         assert flag in help_lines, f"{flag} missing from OWN_FLAG_HELP"
+
+
+def test_own_flags_table_matches_mode_fields():
+    import dataclasses
+
+    assert set(OWN_FLAGS.values()) == {f.name for f in dataclasses.fields(Mode)}

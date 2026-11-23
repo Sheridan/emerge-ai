@@ -8,8 +8,8 @@
 
 ## 2. Табличный парсер собственных флагов (flags.py)
 
-- [ ] 2.1 Заменить `OWN_FLAGS`-кортеж и positional-ветки на маппинг `flag → поле Mode` + цикл с `setattr`; `OWN_FLAG_HELP` генерировать из таблицы фикс-колонкой (устранить расхождение `--changelog`); добавить тест инварианта `set(OWN_FLAGS.values()) == {f.name for f in dataclasses.fields(Mode)}`; прогнать `pytest tests/test_flags.py tests/test_cli.py` — зелено (1.1–1.3 переживают рефакторинг без правок)
-- [ ] 2.2 В `_flag_kinds`/`flag_present`/`drop_flags` (runner.py) уточнить docstring'ы и имена (что за какие множества отвечает), поведение не менять; прогнать `pytest tests/test_flags.py -k "present or drop"` — зелено
+- [x] 2.1 Заменить `OWN_FLAGS`-кортеж и positional-ветки на маппинг `flag → поле Mode` + цикл с `setattr`; `OWN_FLAG_HELP` генерировать из таблицы фикс-колонкой (устранить расхождение `--changelog`); добавить тест инварианта `set(OWN_FLAGS.values()) == {f.name for f in dataclasses.fields(Mode)}`; прогнать `pytest tests/test_flags.py tests/test_cli.py` — зелено (1.1–1.3 переживают рефакторинг без правок)
+- [x] 2.2 В `_flag_kinds`/`flag_present`/`drop_flags` (runner.py) уточнить docstring'ы и имена (что за какие множества отвечает), поведение не менять; прогнать `pytest tests/test_flags.py -k "present or drop"` — зелено
 
 ## 3. Хелперы main() и типизация (cli.py, state.py)
 
