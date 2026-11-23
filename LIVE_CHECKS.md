@@ -27,6 +27,9 @@ sudo emerge-ai -a sys-apps/baselayout
 - `emerge-ai emerge-ai -av` (кластерный `-a`): в фазе плана emerge НЕ должен печатать свой
   «Would you like to merge these packages?» — вопрос задаёт только emerge-ai; ответ `n` → abort, rc=0.
   (регрессия: до фикса `-av` не распознавался как `--ask` и уходил в passthrough)
+- `emerge-ai <атом> -pv` с гарантированным конфликтом (slot-conflict/masked): rc≠0 и stderr содержит
+  «emerge-ai: incident -> consulting agent» + предложение агента. (регрессия: до фикса план-фол
+  сохранялся молча, `_maybe_agent` исключал класс plan-failed)
 
 (заполняется по мере готовности инцидент-агента)
 

@@ -29,6 +29,12 @@ CLASS_SKELETONS: dict[str, str] = {
         "Dependency resolution failed (blockers / no ebuilds). Use pretend_emerge with "
         "hypotheses (unmerge candidate, slot move) before proposing anything."
     ),
+    "plan-failed": (
+        "The --pretend plan run failed before any merge started (resolution errors: slot "
+        "conflicts, missing or masked ebuilds, broken world file). Analyze stderr; probe "
+        "with pretend_emerge on single packages; consider --backtrack, narrow unmask, or "
+        "removing stale world entries. Never propose an actual merge."
+    ),
     "cycle": (
         "A dependency cycle was found. Locate the cycle lines in the output; propose "
         "--nodeps only as a last, clearly-labelled hypothesis."

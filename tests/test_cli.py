@@ -83,6 +83,30 @@ def test_ask_confirmed_merges_without_ask_flags(emerge_stub, ok_compat, monkeypa
     assert calls() == [["-N", "sys-apps/foo", "--pretend"], ["-N", "sys-apps/foo"]]
 
 
+def test_plan_failure_consults_agent(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_ERR", "slot conflict: dev-util/glslang")
+    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    seen = []
+
+    def agent(incident):
+        seen.append(incident)
+        return "PROPOSAL: pin glslang"
+
+    rc = cli.main(
+        ["-p", "sys-apps/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: None,
+        agent_fn=agent,
+    )
+    assert rc == 1
+    assert seen and seen[0]["class"] == "plan-failed"
+    assert "slot conflict" in seen[0]["stderr_tail"]
+    assert "PROPOSAL: pin glslang" in capsys.readouterr().err
+
+
 def test_ask_cluster_av_intercepted(emerge_stub, ok_compat, monkeypatch, tmp_path):
     binary, calls = emerge_stub
     monkeypatch.setattr(builtins, "input", lambda prompt="": "n")

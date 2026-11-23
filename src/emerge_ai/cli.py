@@ -78,13 +78,14 @@ def _default_protect(run, plan) -> Protection:
 
 
 def _maybe_agent(run, config_path, agent_fn=None) -> str | None:
-    if not run.incident or run.incident.get("class") == "plan-failed":
+    if not run.incident:
         return None
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
         return
     if not cfg.endpoint:
+        print("emerge-ai: no LLM endpoint configured; agent consultation skipped", file=sys.stderr)
         return None
     print("emerge-ai: incident -> consulting agent (proposals only, nothing is executed)...",
           file=sys.stderr)
@@ -267,7 +268,11 @@ def main(
         plan_args.append("--pretend")
     rc, output = run_emerge_capturing(plan_args, emerge_binary=emerge_binary)
     if rc != 0:
-        run.incident = {"class": "plan-failed", "returncode": rc}
+        incident = build_incident(rc, output, plan_args)
+        incident["class"] = "plan-failed"
+        run.incident = incident
+        state.transition(run, state.INCIDENT, runs_dir)
+        run.agent_proposal = _maybe_agent(run, config_path, agent_fn)
         state.save_run(run, runs_dir)
         return rc
 
