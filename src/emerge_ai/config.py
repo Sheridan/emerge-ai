@@ -64,11 +64,18 @@ class Config:
         return "english"
 
 
+def config_path(path: str | Path | None = None) -> Path:
+    override = os.environ.get("EMERGE_AI_CONFIG")
+    if override and path in (None, CONFIG_PATH):
+        return Path(override)
+    return Path(CONFIG_PATH if path is None else path)
+
+
 def load_config(path: str | Path = CONFIG_PATH, warn=None) -> Config:
     if warn is None:
         def warn(msg: str) -> None:
             print(msg, file=sys.stderr)
-    path = Path(path)
+    path = config_path(path)
     if not path.exists():
         cfg = Config()
         cfg.source = str(path)

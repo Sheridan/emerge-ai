@@ -4,6 +4,11 @@ import sys
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _isolate_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERGE_AI_CONFIG", str(tmp_path / "emerge-ai.json"))
+
 STUB = """#!/usr/bin/env python3
 import os, sys
 log = os.environ.get("EMERGE_STUB_LOG")

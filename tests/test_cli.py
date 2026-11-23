@@ -52,8 +52,17 @@ def test_ask_denied_never_merges(emerge_stub, ok_compat, monkeypatch, capsys, tm
     monkeypatch.setattr(builtins, "input", lambda prompt="": "n")
     rc = cli.main(["-a", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
     assert rc == 0
-    assert calls() == [["-a", "sys-apps/foo", "--pretend"]]
+    assert calls() == [["sys-apps/foo", "--pretend"]]
     assert "aborted" in capsys.readouterr().err
+
+
+def test_ask_flag_never_reaches_emerge_plan_phase(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "n")
+    assert cli.main(["-ap", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None) == 0
+    assert calls() == [["-p", "sys-apps/foo"]]
+    for call in calls():
+        assert "-a" not in call and "--ask" not in call
 
 
 def test_ask_eof_denied(emerge_stub, ok_compat, monkeypatch, tmp_path):
@@ -71,7 +80,14 @@ def test_ask_confirmed_merges_without_ask_flags(emerge_stub, ok_compat, monkeypa
     binary, calls = emerge_stub
     monkeypatch.setattr(builtins, "input", lambda prompt="": "y")
     assert cli.main(["-a", "-N", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None) == 0
-    assert calls() == [["-a", "-N", "sys-apps/foo", "--pretend"], ["-N", "sys-apps/foo"]]
+    assert calls() == [["-N", "sys-apps/foo", "--pretend"], ["-N", "sys-apps/foo"]]
+
+
+def test_ask_cluster_av_intercepted(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "n")
+    assert cli.main(["-av", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None) == 0
+    assert calls() == [["-v", "sys-apps/foo", "--pretend"]]
 
 
 def test_ask_noninteractive_proceeds_without_prompt(emerge_stub, ok_compat, monkeypatch, tmp_path):

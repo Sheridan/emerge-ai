@@ -24,6 +24,10 @@ sudo emerge-ai -a sys-apps/baselayout
 
 ## 14.2 Полный live-сценарий (после группы 14)
 
+- `emerge-ai emerge-ai -av` (кластерный `-a`): в фазе плана emerge НЕ должен печатать свой
+  «Would you like to merge these packages?» — вопрос задаёт только emerge-ai; ответ `n` → abort, rc=0.
+  (регрессия: до фикса `-av` не распознавался как `--ask` и уходил в passthrough)
+
 (заполняется по мере готовности инцидент-агента)
 
 ## Стенд оверлея (группа 11, тесты test_overlay_live.py)

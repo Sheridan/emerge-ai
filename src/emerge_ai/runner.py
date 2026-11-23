@@ -42,5 +42,34 @@ def confirm(prompt: str = "Proceed? [y/N] ", stream=sys.stdin) -> bool:
     return answer.strip().lower() in ("y", "yes")
 
 
+def _flag_kinds(flags: tuple[str, ...]) -> tuple[set[str], set[str]]:
+    longs = {f for f in flags if f.startswith("--")}
+    shorts = {f[1] for f in flags if f.startswith("-") and not f.startswith("--")}
+    return longs, shorts
+
+
+def flag_present(emerge_args: list[str], flags: tuple[str, ...]) -> bool:
+    """True if a flag appears standalone or inside a short-option cluster (-av)."""
+    longs, shorts = _flag_kinds(flags)
+    for a in emerge_args:
+        if a in longs:
+            return True
+        if a.startswith("-") and not a.startswith("--") and set(a[1:]) & shorts:
+            return True
+    return False
+
+
 def drop_flags(emerge_args: list[str], flags: tuple[str, ...]) -> list[str]:
-    return [a for a in emerge_args if a not in flags]
+    """Remove flags everywhere, including from short-option clusters (-av -> -v)."""
+    longs, shorts = _flag_kinds(flags)
+    out: list[str] = []
+    for a in emerge_args:
+        if a in longs:
+            continue
+        if a.startswith("-") and not a.startswith("--") and set(a[1:]) & shorts:
+            kept = "".join(c for c in a[1:] if c not in shorts)
+            if kept:
+                out.append("-" + kept)
+            continue
+        out.append(a)
+    return out

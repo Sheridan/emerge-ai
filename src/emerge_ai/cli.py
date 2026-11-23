@@ -19,7 +19,7 @@ from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan
 from emerge_ai import rollback as rollback_mod
 from emerge_ai.rollback import Protection
-from emerge_ai.runner import confirm, drop_flags, run_emerge, run_emerge_capturing
+from emerge_ai.runner import confirm, drop_flags, flag_present, run_emerge, run_emerge_capturing
 from emerge_ai.tiers import TierService, snapshot_required
 
 PRETEND_FLAGS = ("-p", "--pretend")
@@ -241,8 +241,8 @@ def main(
         run = state.new_run(emerge_args, mode)
         state.save_run(run, runs_dir)
 
-    pretend = any(a in PRETEND_FLAGS for a in emerge_args)
-    ask = any(a in ASK_FLAGS for a in emerge_args)
+    pretend = flag_present(emerge_args, PRETEND_FLAGS)
+    ask = flag_present(emerge_args, ASK_FLAGS)
 
     if not pretend and not ask:
         _advance_to_merge(run, runs_dir)
@@ -261,6 +261,8 @@ def main(
     if run.state == state.VERSION_CHECK:
         state.transition(run, state.PLAN, runs_dir)
     plan_args = list(emerge_args)
+    if ask:
+        plan_args = drop_flags(plan_args, ASK_FLAGS)
     if ask and not pretend:
         plan_args.append("--pretend")
     rc, output = run_emerge_capturing(plan_args, emerge_binary=emerge_binary)

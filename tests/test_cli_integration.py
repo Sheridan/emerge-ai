@@ -111,7 +111,7 @@ def test_protection_failure_denied_aborts_before_merge(emerge_stub, ok_compat, m
         protect_fn=lambda run, plan: failed,
     )
     assert rc == 5
-    assert calls() == [["-a", "sys-libs/glibc", "--pretend"]]
+    assert calls() == [["sys-libs/glibc", "--pretend"]]
 
 
 def test_protection_failure_noninteractive_refuses(emerge_stub, ok_compat, tmp_path):
@@ -125,7 +125,7 @@ def test_protection_failure_noninteractive_refuses(emerge_stub, ok_compat, tmp_p
         protect_fn=lambda run, plan: failed,
     )
     assert rc == 5
-    assert calls() == [["-a", "sys-libs/glibc", "--pretend"]]
+    assert calls() == [["sys-libs/glibc", "--pretend"]]
 
 
 def test_resume_reuses_existing_recovery_point(emerge_stub, ok_compat, tmp_path, capsys):
@@ -158,7 +158,7 @@ def test_resume_reuses_existing_recovery_point(emerge_stub, ok_compat, tmp_path,
         b.input = b_input
     assert rc == 0
     assert "reusing recovery point" in capsys.readouterr().err
-    assert calls() == [["-a", "sys-apps/x", "--pretend"], ["sys-apps/x"]]
+    assert calls() == [["sys-apps/x", "--pretend"], ["sys-apps/x"]]
 
 
 def test_merge_failure_records_incident_context(emerge_stub, ok_compat, monkeypatch, tmp_path):
