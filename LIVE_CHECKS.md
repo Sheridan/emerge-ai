@@ -58,6 +58,7 @@ cd / && emerge-ai --version
 #   → версия emerge-ai рядом с версией Portage
 
 # prompt-правила резолвятся из /usr/share/emerge-ai/prompts
-cd / && python -c "from emerge_ai.prompts import load_rules; print(len(load_rules()))"
-#   → число > 0
+# (ABI пакета = PYTHON_SINGLE_TARGET, не обязательно eselect-python по умолчанию)
+cd / && python3.13 -c "from emerge_ai.prompts import load_rules; print(len(load_rules()))"
+#   → число > 0 (2402 на текущих правилах)
 ```
