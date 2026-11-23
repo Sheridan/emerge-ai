@@ -1,4 +1,4 @@
-from emerge_ai.flags import Mode, parse_own_flags
+from emerge_ai.flags import OWN_FLAGS, OWN_FLAG_HELP, Mode, parse_own_flags
 from emerge_ai.runner import drop_flags, flag_present
 
 ASK = ("-a", "--ask")
@@ -37,3 +37,29 @@ def test_default_mode_is_interactive():
     mode, rest = parse_own_flags(["-p", "sys-apps/portage"])
     assert mode == Mode()
     assert rest == ["-p", "sys-apps/portage"]
+
+
+def test_own_flag_exact_match_not_prefix():
+    mode, rest = parse_own_flags(["--noninteractiveX", RESPONSIBILITY + "X"])
+    assert mode == Mode()
+    assert rest == ["--noninteractiveX", RESPONSIBILITY + "X"]
+
+
+def test_own_flags_recognized_at_any_position():
+    mode, rest = parse_own_flags(
+        ["-uDN", "--changelog", "sys-apps/foo", RESPONSIBILITY, "--keep-going"]
+    )
+    assert mode == Mode(changelog=True, responsibility=True)
+    assert rest == ["-uDN", "sys-apps/foo", "--keep-going"]
+
+
+def test_repeated_own_flag_is_idempotent():
+    mode, rest = parse_own_flags(["--noninteractive", "--noninteractive", "-p", "x"])
+    assert mode == Mode(noninteractive=True)
+    assert rest == ["-p", "x"]
+
+
+def test_help_lists_every_own_flag():
+    help_lines = {ln.strip().split()[0] for ln in OWN_FLAG_HELP.splitlines() if ln.strip()}
+    for flag in OWN_FLAGS:
+        assert flag in help_lines, f"{flag} missing from OWN_FLAG_HELP"

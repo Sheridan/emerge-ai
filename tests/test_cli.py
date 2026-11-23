@@ -124,3 +124,55 @@ def test_ask_noninteractive_proceeds_without_prompt(emerge_stub, ok_compat, monk
     rc = cli.main(["--noninteractive", "-a", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
     assert rc == 0
     assert calls()[-1] == ["sys-apps/foo"]
+
+
+# --- meta flags: --version/-V/--help are recognized only as argv[0] (spec: cli-compat) ---
+
+
+def test_version_meta_flag_prints_and_skips_emerge(emerge_stub, ok_compat, capsys, tmp_path):
+    binary, calls = emerge_stub
+    for meta in ("--version", "-V"):
+        rc = cli.main([meta], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "emerge-ai" in out and "3.0.82.2" in out
+    assert calls() == []
+
+
+def test_help_meta_flag_prints_own_flags_and_skips_emerge(emerge_stub, ok_compat, capsys, tmp_path):
+    binary, calls = emerge_stub
+    rc = cli.main(["--help"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "--noninteractive" in out and "--changelog" in out
+    assert calls() == []
+
+
+def test_meta_flag_at_nonzero_position_passes_through(emerge_stub, ok_compat, capsys, tmp_path):
+    binary, calls = emerge_stub
+    rc = cli.main(["-p", "--help"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    assert rc == 0
+    assert calls() == [["-p", "--help"]]
+    assert "own flags" not in capsys.readouterr().out
+
+
+def test_meta_flags_work_with_incompatible_portage(emerge_stub, monkeypatch, capsys, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli.portage_compat, "portage_version", lambda: "3.1.0")
+    assert cli.main(["--help"], emerge_binary=binary, runs_dir=str(tmp_path)) == 0
+    assert "--noninteractive" in capsys.readouterr().out
+    assert cli.main(["-V"], emerge_binary=binary, runs_dir=str(tmp_path)) == 0
+    assert "emerge-ai" in capsys.readouterr().out
+    assert calls() == []
+
+
+def test_changelog_bypasses_version_gate(emerge_stub, monkeypatch, capsys, tmp_path):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli.portage_compat, "portage_version", lambda: "3.1.0")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"gh_repos": [], "git_urls": [], "news_dir": "%s"}' % (tmp_path / "no-news"))
+    rc = cli.main(["--changelog"], emerge_binary=binary, config_path=str(cfg), runs_dir=str(tmp_path))
+    assert rc == 0
+    assert calls() == []
+    err = capsys.readouterr().err
+    assert "incompatible" not in err.lower()
