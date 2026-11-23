@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import re
@@ -26,9 +27,11 @@ class ScriptedClient:
         self.steps = list(steps)
         self.messages = []
         self.seen_tool_results = []
+        self.tools_seen: list = []
 
     def chat(self, messages, tools=None, temperature=0.2):
         self.messages = messages
+        self.tools_seen = list(tools or [])
         for m in messages:
             if m.get("role") == "tool":
                 self.seen_tool_results.append(m["content"])
@@ -39,11 +42,37 @@ class ScriptedClient:
             ])
         return step
 
+    @property
+    def tool_names(self) -> list[str]:
+        return [t["function"]["name"] for t in self.tools_seen]
+
     def render(self, resp, stream=None):
         if resp.reasoning:
             print(f"[reasoning] {resp.reasoning}", file=stream)
         if resp.content:
             print(resp.content, file=stream)
+
+
+QUESTION = {
+    "question": "Which init do you run?",
+    "options": [
+        {"label": "systemd", "consequences": "rebuilds 40 packages"},
+        {"label": "openrc", "consequences": "keeps the queue"},
+    ],
+}
+
+
+def scripted_channel(*answers):
+    """Stand-in ask_channel: records what the agent wanted to show, replays answers."""
+    calls: list = []
+    it = iter(answers)
+
+    def channel(question, options):
+        calls.append((question, options))
+        return next(it)
+
+    channel.calls = calls
+    return channel
 
 
 @pytest.fixture
@@ -104,14 +133,207 @@ def test_agent_propose_renders_rounds_to_stream(jail):
     assert "PROPOSAL" in res.proposal
 
 
-def test_agent_prompt_requires_plain_text_and_question_convention(jail):
+def test_agent_prompt_requires_plain_text_and_quiet_directive(jail):
+    """Non-interactive prompt: plain text, no QUESTION: marker, assumptions section."""
     sb, log = jail
     client = ScriptedClient([])
     agent = IncidentAgent(client, sb, rules="R", max_rounds=2)
     agent.propose(incident(log))
     system = client.messages[0]["content"]
     assert "plain text" in system and "markdown" in system
-    assert "QUESTION: " in system
+    assert "QUESTION:" not in system
+    assert "never wait" not in system.lower()
+    assert "Do not ask the operator" in system
+    assert "ASSUMPTIONS:" in system
+
+
+def test_agent_prompt_interactive_directive(jail):
+    sb, log = jail
+    client = ScriptedClient([])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=2)
+    agent.propose(incident(log), interactive=True)
+    system = client.messages[0]["content"]
+    assert "ask_operator" in system
+    assert "pretend_emerge" in system and "consequences" in system
+    assert "ASSUMPTIONS:" not in system
+    assert "QUESTION:" not in system
+
+
+# --- ask_operator: tool list, guards, budget, channel (spec: agent-loop-consent) ---
+
+
+def test_ask_tool_only_in_interactive_payload(jail):
+    sb, log = jail
+    live = ScriptedClient([])
+    IncidentAgent(live, sb, rules="R", max_rounds=2).propose(incident(log), interactive=True)
+    assert "ask_operator" in live.tool_names
+    assert {"read_file_window", "pretend_emerge"} <= set(live.tool_names)
+
+    quiet = ScriptedClient([])
+    IncidentAgent(quiet, sb, rules="R", max_rounds=2).propose(incident(log))
+    assert "ask_operator" not in quiet.tool_names
+    assert "read_file_window" in quiet.tool_names
+
+
+def test_ask_answer_reaches_model_and_trace(jail):
+    sb, log = jail
+    answer = {"status": "answered", "choice": "openrc — keeps the queue"}
+    channel = scripted_channel(answer)
+    client = ScriptedClient([{"ask_operator": QUESTION}])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=channel)
+    result = agent.propose(incident(log), interactive=True)
+    assert channel.calls == [(QUESTION["question"], QUESTION["options"])]
+    assert [t[0] for t in result.trace] == ["ask_operator", "ask_answer"]
+    assert result.trace[1][1] == answer
+    assert result.tool_calls_used == 1
+    assert any("openrc" in r and "answered" in r for r in client.seen_tool_results)
+    # operator's answer is trusted input: no untrusted-data wrapper around it
+    assert not any("UNTRUSTED-DATA-BEGIN" in r for r in client.seen_tool_results)
+
+
+def test_ask_operator_second_question_same_turn_is_guarded(jail):
+    sb, log = jail
+    channel = scripted_channel({"status": "answered", "free_text": "openrc"})
+    two_questions = Response(content="", tool_calls=[
+        ToolCall(id="a", name="ask_operator", arguments=QUESTION),
+        ToolCall(id="b", name="ask_operator", arguments=QUESTION),
+    ])
+    client = ScriptedClient([two_questions])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=channel)
+    result = agent.propose(incident(log), interactive=True)
+    assert len(channel.calls) == 1
+    assert result.tool_calls_used == 1
+    assert any("one question at a time" in r for r in client.seen_tool_results)
+
+
+def test_ask_budget_three_questions_per_incident(jail):
+    sb, log = jail
+    answers = [{"status": "answered", "free_text": f"a{i}"} for i in range(3)]
+    channel = scripted_channel(*answers)
+    steps = [{"ask_operator": QUESTION} for _ in range(4)]
+    client = ScriptedClient(steps)
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=8, ask_channel=channel)
+    agent.propose(incident(log), interactive=True)
+    assert len(channel.calls) == 3  # the fourth question is never shown
+    assert any('"limit"' in r and "ASSUMPTIONS:" in r for r in client.seen_tool_results)
+
+
+def test_ask_quit_closes_further_questions(jail):
+    sb, log = jail
+    channel = scripted_channel({"status": "no-answer", "reason": "quit"})
+    steps = [{"ask_operator": QUESTION}, {"ask_operator": QUESTION}]
+    client = ScriptedClient(steps)
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=4, ask_channel=channel)
+    agent.propose(incident(log), interactive=True)
+    assert len(channel.calls) == 1  # closed: nothing printed for the second call
+    assert any('"closed"' in r and "ASSUMPTIONS:" in r for r in client.seen_tool_results)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"question": "  ", "options": QUESTION["options"]},
+        {"question": "Which init?", "options": []},
+        {"question": "Which init?", "options": [{"label": "x", "consequences": "y"}] * 7},
+        {"question": "Which init?", "options": [{"label": "x", "consequences": " "}]},
+        {"question": "Which init?", "options": "openrc"},
+    ],
+)
+def test_ask_invalid_schema_costs_nothing(jail, bad):
+    sb, log = jail
+    channel = scripted_channel({"status": "answered", "free_text": "openrc"})
+    client = ScriptedClient([{"ask_operator": bad}, {"ask_operator": QUESTION}])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=4, ask_channel=channel)
+    result = agent.propose(incident(log), interactive=True)
+    assert len(channel.calls) == 1  # only the valid question was shown
+    assert result.tool_calls_used == 1  # the rejected call spent no budget
+    errors = [r for r in client.seen_tool_results if "ask_operator:" in r]
+    assert errors and "ask_operator: " in errors[0]
+
+
+def test_ask_operator_rejected_in_noninteractive_run(jail):
+    sb, log = jail
+    channel = scripted_channel({"status": "answered", "free_text": "x"})
+    client = ScriptedClient([{"ask_operator": QUESTION}])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=channel)
+    agent.propose(incident(log))
+    assert channel.calls == []
+    assert any("not available in a non-interactive run" in r for r in client.seen_tool_results)
+
+
+# --- default channel: render + input() with guaranteed exits (task 2.3) ---
+
+
+@pytest.fixture
+def default_agent(jail):
+    sb, log = jail
+    return IncidentAgent(ScriptedClient([]), sb, rules="R", max_rounds=2)
+
+
+def test_default_channel_number_selects_option(default_agent, monkeypatch, capsys):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "2")
+    answer = default_agent.ask_channel(QUESTION["question"], QUESTION["options"])
+    assert answer == {"status": "answered", "choice": "openrc — keeps the queue"}
+    err = capsys.readouterr().err
+    assert "Which init do you run?" in err
+    assert "  1. systemd — rebuilds 40 packages" in err
+    assert "[1..2] choose, [c] own text, [q] quit: " in err
+    assert "> openrc — keeps the queue" in err  # the choice is echoed back
+    assert "\x1b" not in err  # captured stderr is not a TTY -> plain
+
+
+def test_default_channel_unrecognized_input_is_free_text(default_agent, monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "keep the old slot for now")
+    assert default_agent.ask_channel("q?", QUESTION["options"]) == {
+        "status": "answered", "free_text": "keep the old slot for now"
+    }
+
+
+def test_default_channel_own_text_marker_and_out_of_range_number(default_agent, monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "c: use --backtrack=50")
+    assert default_agent.ask_channel("q?", QUESTION["options"]) == {
+        "status": "answered", "free_text": "use --backtrack=50"
+    }
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "9")
+    assert default_agent.ask_channel("q?", QUESTION["options"]) == {
+        "status": "answered", "free_text": "9"
+    }
+
+
+@pytest.mark.parametrize("answer", ["q", "quit", ""])
+def test_default_channel_quit_closes_without_hanging(default_agent, monkeypatch, answer):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": answer)
+    assert default_agent.ask_channel("q?", QUESTION["options"]) == {
+        "status": "no-answer", "reason": "quit"
+    }
+
+
+def test_default_channel_eof_is_no_answer(default_agent, monkeypatch):
+    def _eof(prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr(builtins, "input", _eof)
+    assert default_agent.ask_channel("q?", QUESTION["options"]) == {
+        "status": "no-answer", "reason": "eof"
+    }
+
+
+def test_default_channel_eof_then_closed_channel_stays_quiet(jail, monkeypatch, capsys):
+    sb, log = jail
+    calls: list = []
+
+    def _eof(prompt=""):
+        calls.append(prompt)
+        raise EOFError
+
+    monkeypatch.setattr(builtins, "input", _eof)
+    client = ScriptedClient([{"ask_operator": QUESTION}, {"ask_operator": QUESTION}])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3)
+    agent.propose(incident(log), interactive=True)
+    err = capsys.readouterr().err
+    assert err.count("Which init do you run?") == 1  # the second call prints nothing
+    assert len(calls) == 1
+    assert any('"closed"' in r for r in client.seen_tool_results)
 
 
 def test_agent_tool_budget(jail):

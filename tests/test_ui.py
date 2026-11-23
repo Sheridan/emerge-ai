@@ -150,3 +150,76 @@ def test_markdown_in_llm_reply_printed_verbatim():
     pipe = io.StringIO()
     ui.paint_llm_block("**bold** `code` stays", ui.DEFAULT_LLM_COLORS, pipe)
     assert pipe.getvalue() == "**bold** `code` stays\n"
+
+
+# --- operator question channel (spec: agent-loop-consent, design D6) ---
+
+
+def test_render_question_on_tty_uses_palette():
+    tty = TTY()
+    ui.render_question(
+        "Which init do you run?",
+        [
+            {"label": "systemd", "consequences": "rebuilds 12 packages"},
+            {"label": "openrc", "consequences": "keeps the current queue"},
+        ],
+        ui.DEFAULT_LLM_COLORS,
+        tty,
+    )
+    out = tty.getvalue()
+    assert "\x1b[33mWhich init do you run?\x1b[0m" in out
+    assert "\x1b[36m  1. systemd — rebuilds 12 packages\x1b[0m" in out
+    assert "\x1b[36m  2. openrc — keeps the current queue\x1b[0m" in out
+
+
+def test_render_question_plain_in_pipe():
+    pipe = io.StringIO()
+    ui.render_question(
+        "Which init?", [{"label": "systemd", "consequences": "rebuilds 12"}],
+        ui.DEFAULT_LLM_COLORS, pipe,
+    )
+    assert pipe.getvalue() == "Which init?\n  1. systemd — rebuilds 12\n"
+
+
+def test_render_question_without_color_env(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    tty = TTY()
+    ui.render_question("Which init?", [{"label": "s", "consequences": "c"}], None, tty)
+    assert "\x1b" not in tty.getvalue()
+
+
+def test_render_question_empty_options_prints_only_question():
+    pipe = io.StringIO()
+    ui.render_question("Anything you know?", [], ui.DEFAULT_LLM_COLORS, pipe)
+    assert pipe.getvalue() == "Anything you know?\n"
+
+
+def test_render_question_consequences_missing_or_custom_palette():
+    pipe = io.StringIO()
+    ui.render_question("q", [{"label": "  unmask  ", "consequences": "  "}], None, pipe)
+    assert pipe.getvalue() == "q\n  1. unmask\n"
+    tty = TTY()
+    ui.render_question("q", [{"label": "a", "consequences": "b"}], {"question": "off"}, tty)
+    out = tty.getvalue()
+    assert out.startswith("q\n")  # question off -> plain, options keep content color
+    assert "\x1b[36m  1. a — b\x1b[0m" in out
+
+
+def test_choice_prompt_styled_on_tty_plain_in_pipe():
+    assert ui.choice_prompt(3, stream=TTY()) == "\x1b[1;33m[1..3] choose, [c] own text, [q] quit: \x1b[0m"
+    assert ui.choice_prompt(1, stream=io.StringIO()) == "[1] choose, [c] own text, [q] quit: "
+
+
+def test_choice_prompt_default_stream_resolved_at_call_time(monkeypatch):
+    tty = TTY()
+    monkeypatch.setattr(ui.sys, "stdout", tty)
+    assert ui.choice_prompt(2).startswith("\x1b[1;33m[1..2]")
+
+
+def test_echo_answer_goes_to_stream():
+    tty = TTY()
+    ui.echo_answer("openrc — keeps the current queue", ui.DEFAULT_LLM_COLORS, tty)
+    assert tty.getvalue() == "\x1b[36m> openrc — keeps the current queue\x1b[0m\n"
+    pipe = io.StringIO()
+    ui.echo_answer("use --backtrack=50", ui.DEFAULT_LLM_COLORS, pipe)
+    assert pipe.getvalue() == "> use --backtrack=50\n"

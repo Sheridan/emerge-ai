@@ -123,3 +123,38 @@ def paint_llm_block(text: str, palette, stream) -> None:
     for line in text.splitlines():
         key = "question" if line.startswith(QUESTION_PREFIX) else "content"
         print(paint(stream, color_sgr(pal[key]), line), file=stream)
+
+
+# --- interactive operator question channel (spec: agent-loop-consent, design D6) ---
+
+CHOICE_HINT = "[{choices}] choose, [c] own text, [q] quit: "
+
+
+def render_question(question: str, options, palette, stream) -> None:
+    """Print one operator question with numbered options (design D6): the
+    question line takes the palette's question color, the options and their
+    consequences the content color. Coloring is per stream, so a pipe,
+    NO_COLOR or TERM=dumb renders the very same text plain."""
+    pal = resolve_palette(palette)
+    print(paint(stream, color_sgr(pal["question"]), question), file=stream)
+    for num, option in enumerate(options or (), start=1):
+        label = str(option.get("label", "")).strip()
+        consequences = str(option.get("consequences", "")).strip()
+        line = f"  {num}. {label}"
+        if consequences:
+            line += f" — {consequences}"
+        print(paint(stream, color_sgr(pal["content"]), line), file=stream)
+
+
+def choice_prompt(count: int, stream=None) -> str:
+    """Input line for a question with `count` options, in the consent-prompt
+    style (bold yellow) so it stands out from the agent's own text."""
+    choices = f"1..{count}" if count > 1 else "1"
+    return prompt(CHOICE_HINT.format(choices=choices), stream=stream)
+
+
+def echo_answer(text: str, palette, stream) -> None:
+    """Echo the accepted answer right after the input, so the transcript of an
+    incident reads back without the operator having to scroll."""
+    pal = resolve_palette(palette)
+    print(paint(stream, color_sgr(pal["content"]), f"> {text}"), file=stream)
