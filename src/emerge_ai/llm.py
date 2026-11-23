@@ -30,8 +30,9 @@ class LLMError(RuntimeError):
 
 
 class LLMClient:
-    def __init__(self, cfg: Config, timeout: float = 240.0):
+    def __init__(self, cfg: Config, timeout: float = 240.0, *, show_reasoning: bool = False):
         self.cfg = cfg
+        self.show_reasoning = show_reasoning
         try:
             self.base = require_endpoint(cfg).rstrip("/")
         except ConfigError as exc:
@@ -89,8 +90,8 @@ class LLMClient:
         )
 
     def render(self, resp: Response, stream=sys.stderr) -> None:
-        """Show reasoning only when config enables it; content always."""
-        if self.cfg.reasoning_show and resp.reasoning:
+        """Show reasoning only when verbose mode (-v/--verbose) enabled it; content always."""
+        if self.show_reasoning and resp.reasoning:
             print(f"\033[2m[reasoning] {resp.reasoning}\033[0m", file=stream)
         if resp.content:
             print(resp.content, file=stream)

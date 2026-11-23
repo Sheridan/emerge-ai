@@ -188,7 +188,7 @@ class IncidentAgent:
 
         return call
 
-    def propose(self, incident: dict) -> AgentResult:
+    def propose(self, incident: dict, render_to=None) -> AgentResult:
         klass = incident.get("class", "unknown")
         skeleton = CLASS_SKELETONS.get(klass, CLASS_SKELETONS["unknown"])
         system = (
@@ -225,7 +225,7 @@ class IncidentAgent:
         try:
             resp = run_tool_loop(
                 self.client, messages, TOOL_SPECS, self._dispatch(result),
-                max_rounds=self.max_rounds,
+                max_rounds=self.max_rounds, render_to=render_to,
             )
         except LLMError as exc:
             result.proposal = f"agent stopped: {exc}"

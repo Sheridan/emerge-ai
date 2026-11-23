@@ -12,8 +12,8 @@ MODEL = os.environ.get(
 )
 
 
-def _live_client(**kw) -> LLMClient:
-    return LLMClient(Config(endpoint=ENDPOINT, model=MODEL, **kw))
+def _live_client(**client_kw) -> LLMClient:
+    return LLMClient(Config(endpoint=ENDPOINT, model=MODEL), **client_kw)
 
 
 def test_parse_tool_calls_payload():
@@ -42,12 +42,10 @@ def test_parse_tool_calls_payload():
 
 
 def test_render_reasoning_only_when_enabled():
-    cfg_on = Config(endpoint="http://x/v1", reasoning_show=True)
-    cfg_off = Config(endpoint="http://x/v1", reasoning_show=False)
     resp = Response(content="answer", reasoning="because")
     buf_on, buf_off = io.StringIO(), io.StringIO()
-    LLMClient(cfg_on).render(resp, stream=buf_on)
-    LLMClient(cfg_off).render(resp, stream=buf_off)
+    LLMClient(Config(endpoint="http://x/v1"), show_reasoning=True).render(resp, stream=buf_on)
+    LLMClient(Config(endpoint="http://x/v1")).render(resp, stream=buf_off)
     assert "[reasoning] because" in buf_on.getvalue()
     assert "answer" in buf_on.getvalue()
     assert "[reasoning]" not in buf_off.getvalue()
@@ -105,7 +103,7 @@ def test_live_tool_call_loop_executes():
 
 @pytest.mark.integration
 def test_live_reasoning_visibility():
-    on, off = _live_client(reasoning_show=True), _live_client(reasoning_show=False)
+    on, off = _live_client(show_reasoning=True), _live_client()
     prompt = (
         "A package queue has 3 tiers with 2, 5 and 1 packages. How many total? "
         "Show the number."

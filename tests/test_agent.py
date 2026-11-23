@@ -39,6 +39,12 @@ class ScriptedClient:
             ])
         return step
 
+    def render(self, resp, stream=None):
+        if resp.reasoning:
+            print(f"[reasoning] {resp.reasoning}", file=stream)
+        if resp.content:
+            print(resp.content, file=stream)
+
 
 @pytest.fixture
 def jail(tmp_path):
@@ -71,6 +77,31 @@ def test_agent_unit_flow_and_wrapping(jail):
     wrapped = [r for r in client.seen_tool_results if "UNTRUSTED-DATA-BEGIN" in r]
     assert len(wrapped) >= 2
     assert any("injection patterns" in r for r in wrapped)
+
+
+def test_agent_propose_renders_rounds_to_stream(jail):
+    import io
+
+    sb, log = jail
+    steps = [
+        {"grep_log": {"path": log, "pattern": "error"}},
+        Response(content="PROPOSAL: relink", reasoning="undefined symbol"),
+    ]
+
+    client = ScriptedClient(list(steps))
+    buf = io.StringIO()
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=6)
+    agent.propose(incident(log), render_to=buf)
+    streamed = buf.getvalue()
+    assert "[reasoning] undefined symbol" in streamed
+    assert "PROPOSAL: relink" in streamed
+
+    silent = ScriptedClient(list(steps))
+    buf2 = io.StringIO()
+    agent2 = IncidentAgent(silent, sb, rules="R", max_rounds=6)
+    res = agent2.propose(incident(log))  # без render_to — ничего не стримится
+    assert buf2.getvalue() == ""
+    assert "PROPOSAL" in res.proposal
 
 
 def test_agent_tool_budget(jail):

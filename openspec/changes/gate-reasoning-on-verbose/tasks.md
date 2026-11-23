@@ -2,9 +2,9 @@
 
 ## 1. LLMClient: show_reasoning вместо cfg.reasoning_show (llm.py, agent.py)
 
-- [ ] 1.1 `LLMClient.__init__(..., *, show_reasoning: bool = False)`; `render` печатает `[reasoning]` по `self.show_reasoning` (docstring обновить); в `tests/test_llm.py` `test_render_reasoning_only_when_enabled` перевести на `show_reasoning=True/False`; `pytest tests/test_llm.py -k render` — зелено
-- [ ] 1.2 `IncidentAgent.propose(..., render_to=None)` прокидывает в `run_tool_loop`; тест в `tests/test_agent.py`: со стабовым клиентом и `render_to=StringIO` rounds стримятся, без render_to — нет; `pytest tests/test_agent.py` — зелено
-- [ ] 1.3 `_live_client` в `tests/test_llm.py` (`test_live_reasoning_visibility`) перевести на `show_reasoning`; прогнать live-тест при доступном локальном эндпоинте (`pytest tests/test_llm.py -k live` — skip без эндпоинта допустим)
+- [x] 1.1 `LLMClient.__init__(..., *, show_reasoning: bool = False)`; `render` печатает `[reasoning]` по `self.show_reasoning` (docstring обновить); в `tests/test_llm.py` `test_render_reasoning_only_when_enabled` перевести на `show_reasoning=True/False`; `pytest tests/test_llm.py -k render` — зелено
+- [x] 1.2 `IncidentAgent.propose(..., render_to=None)` прокидывает в `run_tool_loop`; тест в `tests/test_agent.py`: со стабовым клиентом и `render_to=StringIO` rounds стримятся, без render_to — нет; `pytest tests/test_agent.py` — зелено
+- [x] 1.3 `_live_client` в `tests/test_llm.py` (`test_live_reasoning_visibility`) перевести на `show_reasoning`; прогнать live-тест при доступном локальном эндпоинте (`pytest tests/test_llm.py -k live` — skip без эндпоинта допустим)
 
 ## 2. Конфиг: удаление reasoning_show (config.py)
 
