@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import re
 
+from emerge_ai import ui
+
 EBUILD_LINE_RE = re.compile(r"^\[ebuild\s+[NnUuRrFf]*\s*\]\s+(\S+)", re.M)
 MERGE_HEAD_RE = re.compile(r"^>>> Emerging \(.*?\) (\S+)", re.M)
 
 
 def parse_installed(text: str) -> list[str]:
     out: list[str] = []
+    plain = ui.strip_ansi(text)
     for rx in (MERGE_HEAD_RE, EBUILD_LINE_RE):
-        for m in rx.finditer(text):
+        for m in rx.finditer(plain):
             cpv = m.group(1)
             if cpv not in out:
                 out.append(cpv)

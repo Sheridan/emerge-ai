@@ -1,6 +1,13 @@
+import io
+
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import format_duration, parse_genlop, plan_digest
 from emerge_ai.plan import Plan, PlanEntry
+
+
+class TTY(io.StringIO):
+    def isatty(self):
+        return True
 
 GENLOP_SAMPLE = (
     "\x1b[1;34m * sys-apps/portage\n\n\x1b[0m"
@@ -53,3 +60,24 @@ def test_is_mass_update():
     assert is_mass_update(["sys-apps/foo"], plan=_plan()) is False
     big = Plan(entries=[PlanEntry(f"c/p{i}", 5, "hint") for i in range(60)])
     assert is_mass_update([], plan=big) is True
+
+
+def test_plan_digest_tier_gradient_on_tty_plain_on_pipe():
+    tty = TTY()
+    digest = plan_digest(_plan(), estimate=None, stream=tty)
+    assert "\x1b[31m  tier 1:" in digest
+    assert "\x1b[2m  tier 5:" in digest
+    assert digest.count("\x1b[0m") == 2
+    plain = plan_digest(_plan(), estimate=None, stream=io.StringIO())
+    assert "\x1b" not in plain and "tier 1: 1 pkg(s)" in plain
+
+
+def test_doctor_report_tier_gradient_on_tty_plain_on_pipe():
+    tty = TTY()
+    report = doctor_report(_plan(), estimate=lambda cpv: 60, stream=tty)
+    warning = next(l for l in report if "sys-libs/glibc-2.42" in l)
+    assert warning.startswith("\x1b[31m") and warning.endswith("\x1b[0m")
+    header = next(l for l in report if "doctor" in l)
+    assert "\x1b" not in header
+    plain = doctor_report(_plan(), estimate=lambda cpv: 60, stream=io.StringIO())
+    assert all("\x1b" not in l for l in plain)

@@ -104,6 +104,16 @@ def test_agent_propose_renders_rounds_to_stream(jail):
     assert "PROPOSAL" in res.proposal
 
 
+def test_agent_prompt_requires_plain_text_and_question_convention(jail):
+    sb, log = jail
+    client = ScriptedClient([])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=2)
+    agent.propose(incident(log))
+    system = client.messages[0]["content"]
+    assert "plain text" in system and "markdown" in system
+    assert "QUESTION: " in system
+
+
 def test_agent_tool_budget(jail):
     sb, log = jail
 

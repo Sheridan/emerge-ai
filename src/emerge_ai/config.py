@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from emerge_ai import ui
+
 CONFIG_PATH = "/etc/portage/emerge-ai.json"
 
 DEFAULTS = {
@@ -21,6 +23,7 @@ DEFAULTS = {
     "gh_repos": [],
     "git_urls": [],
     "news_dir": "/var/lib/eselect-news/news",
+    "llm_colors": dict(ui.DEFAULT_LLM_COLORS),
 }
 
 # Keys accepted in old configs, now gone: key -> where it went.
@@ -45,6 +48,7 @@ class Config:
     gh_repos: list = field(default_factory=list)
     git_urls: list = field(default_factory=list)
     news_dir: str = "/var/lib/eselect-news/news"
+    llm_colors: dict = field(default_factory=lambda: dict(ui.DEFAULT_LLM_COLORS))
     source: str | None = field(default=None, compare=False)
 
     @classmethod
@@ -59,6 +63,8 @@ class Config:
             if key in data:
                 warn(f"emerge-ai: config: key {key!r} {_REMOVED_KEYS[key]}")
         kwargs = {k: data[k] for k in DEFAULTS if k in data}
+        if "llm_colors" in kwargs:
+            kwargs["llm_colors"] = ui.resolve_palette(kwargs["llm_colors"], warn=warn)
         return cls(source=source, **kwargs)
 
     def resolved_language(self) -> str:

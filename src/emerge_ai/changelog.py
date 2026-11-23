@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from emerge_ai import injection
+from emerge_ai.prompts import PLAIN_TEXT_DIRECTIVE
 
 NEWS_DIR = "/var/lib/eselect-news/news"
 GLESA_INDEX = "/var/cache/portage/glsa/index-cache"  # may be absent -> unavailable
@@ -89,7 +90,8 @@ CHANGE_SYSTEM = (
     "what a Gentoo sysadmin MUST know before the next world update: security fixes, "
     "breaking config changes, USE/profile changes, news requiring action. Output a short "
     "bulleted list, each bullet citing its source id; skip trivia. If everything is trivia "
-    "say: nothing important."
+    "say: nothing important. "
+    + PLAIN_TEXT_DIRECTIVE
 )
 
 

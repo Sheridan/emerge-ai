@@ -14,6 +14,13 @@ from emerge_ai.rollback import Protection
 
 pytestmark = pytest.mark.integration
 
+
+@pytest.fixture(autouse=True)
+def _captured_output_is_always_plain(capsys):
+    yield
+    out, err = capsys.readouterr()
+    assert "\x1b" not in out and "\x1b" not in err, "capsys output must never carry ANSI codes"
+
 BLOCKS = Path("tests/fixtures/blocks.txt").read_text()
 
 

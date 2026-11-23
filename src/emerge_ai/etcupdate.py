@@ -13,10 +13,11 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-from emerge_ai import injection
+from emerge_ai import injection, ui
 
 CFG_SUFFIX_RE = re.compile(r"/\.?_cfg\d{4}_[^/]+$")
 PROTECT_RE = re.compile(r"(?:config protected|etc-update|File protections|\.?_cfg\d{4}_)", re.I)
@@ -39,17 +40,26 @@ def original_of(new_path: str) -> str:
     return os.path.join(head, f"{m.group(1)}{m.group(2)}") if m else new_path
 
 
-def show_diff(new_path: str, current_path: str | None = None, label: str = "") -> str:
+def show_diff(new_path: str, current_path: str | None = None, label: str = "", stream=None) -> str:
+    stream = sys.stderr if stream is None else stream
     current = current_path or original_of(new_path)
     new_text = Path(new_path).read_text(errors="replace").splitlines()
     cur_text = Path(current).read_text(errors="replace").splitlines() if Path(current).exists() else []
     diff = difflib.unified_diff(cur_text, new_text, fromfile=current, tofile=new_path, lineterm="")
-    return "\n".join(diff) or f"(no textual difference: {label or current})"
+    colored = [
+        ui.paint(stream, ui.color_sgr("green"), line)
+        if line.startswith("+")
+        else ui.paint(stream, ui.color_sgr("red"), line)
+        if line.startswith("-")
+        else line
+        for line in diff
+    ]
+    return "\n".join(colored) or f"(no textual difference: {label or current})"
 
 
 DECISION_SCHEMA = """Answer with ONE JSON object, no prose:
 {"action": "keep-current" | "take-new" | "merge",
- "reason": "one sentence",
+ "reason": "one sentence, plain text, no markdown markup",
  "citations": ["path-or-url: quote fragment"],
  "merged_text": "only when action=merge, the FULL final file text"}"""
 

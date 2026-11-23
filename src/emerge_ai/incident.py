@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import re
 
+from emerge_ai import ui
+
 FAILURE_CLASSES: list[tuple[str, list[str]]] = [
     ("cycle", [
         r"Dependency loop #\d+",
@@ -113,19 +115,20 @@ def extract_phase(text: str, klass: str) -> str | None:
 def build_incident(
     returncode: int, stderr_text: str, argv: list[str], tail_chars: int = 4000
 ) -> dict:
-    klass = classify(stderr_text)
-    cpv = extract_cpv(stderr_text)
-    phase = extract_phase(stderr_text, klass)
+    text = ui.strip_ansi(stderr_text)
+    klass = classify(text)
+    cpv = extract_cpv(text)
+    phase = extract_phase(text, klass)
     incident = {
         "class": klass,
         "returncode": returncode,
         "argv": list(argv),
-        "stderr_tail": stderr_text[-tail_chars:],
+        "stderr_tail": text[-tail_chars:],
         "phase": phase,
     }
     if cpv:
         incident["cpv"] = cpv
-        log_match = PHASE_RE.search(stderr_text)
+        log_match = PHASE_RE.search(text)
         incident["build_log"] = (
             log_match.group(0) if log_match else f"/var/tmp/portage/{cpv}/temp/build.log"
         )

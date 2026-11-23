@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+from emerge_ai import ui
+
 EMERGE = "emerge"
 
 
@@ -16,7 +18,9 @@ def run_emerge(emerge_args: list[str], emerge_binary: str = EMERGE) -> int:
 
 def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) -> tuple[int, str]:
     """Run emerge (typically --pretend), mirroring output to stdout while
-    buffering it for the enrichment hook. No TTY is attached."""
+    buffering it for the enrichment hook. No TTY is attached. stdout stays
+    byte-identical passthrough (spec: console-output); the buffer is ANSI-stripped
+    because it feeds parsing and the LLM (design D5)."""
     proc = subprocess.Popen(
         [emerge_binary, *emerge_args],
         stdout=subprocess.PIPE,
@@ -28,7 +32,7 @@ def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) ->
     for line in proc.stdout:
         sys.stdout.write(line)
         sys.stdout.flush()
-        lines.append(line)
+        lines.append(ui.strip_ansi(line))
     proc.wait()
     return proc.returncode, "".join(lines)
 

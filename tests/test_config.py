@@ -48,6 +48,44 @@ def test_unknown_key_ignored_with_warning(tmp_path, capsys):
     assert "wat" in capsys.readouterr().err
 
 
+def test_llm_colors_absent_gives_defaults(tmp_path, capsys):
+    cfg = load_config(tmp_path / "absent.json")
+    assert cfg.llm_colors == {"content": "cyan", "reasoning": "dim", "question": "yellow"}
+    assert capsys.readouterr().err == ""
+
+
+def test_llm_colors_partial_dict(tmp_path):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"llm_colors": {"content": "magenta", "question": "off"}}')
+    cfg = load_config(p)
+    assert cfg.llm_colors == {"content": "magenta", "reasoning": "dim", "question": "off"}
+
+
+def test_llm_colors_invalid_name_warns_and_defaults_field(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"llm_colors": {"content": "hot-pink", "reasoning": "bold"}}')
+    cfg = load_config(p)
+    assert cfg.llm_colors["content"] == "cyan"
+    assert cfg.llm_colors["reasoning"] == "bold"
+    err = capsys.readouterr().err
+    assert "llm_colors.content" in err and "hot-pink" in err
+
+
+def test_llm_colors_non_dict_warns_all_defaults(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"llm_colors": "cyan"}')
+    cfg = load_config(p)
+    assert cfg.llm_colors == {"content": "cyan", "reasoning": "dim", "question": "yellow"}
+    assert "JSON object" in capsys.readouterr().err
+
+
+def test_llm_colors_key_not_reported_unknown(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"llm_colors": {"content": "red"}}')
+    assert load_config(p).llm_colors["content"] == "red"
+    assert "unknown key" not in capsys.readouterr().err
+
+
 def test_broken_json_raises(tmp_path):
     p = tmp_path / "cfg.json"
     p.write_text("{not json")

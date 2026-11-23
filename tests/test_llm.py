@@ -52,6 +52,32 @@ def test_render_reasoning_only_when_enabled():
     assert "answer" in buf_off.getvalue()
 
 
+class TTY(io.StringIO):
+    def isatty(self):
+        return True
+
+
+def test_render_tty_uses_palette_colors():
+    resp = Response(content="hello\nQUESTION: init?", reasoning="think")
+    buf = TTY()
+    LLMClient(Config(endpoint="http://x/v1"), show_reasoning=True).render(resp, stream=buf)
+    out = buf.getvalue()
+    assert "\x1b[2m[reasoning] think\x1b[0m" in out
+    assert "\x1b[36mhello\x1b[0m" in out
+    assert "\x1b[33mQUESTION: init?\x1b[0m" in out
+
+
+def test_render_custom_and_off_palette_never_escape_on_pipe():
+    resp = Response(content="hello")
+    cfg = Config(endpoint="http://x/v1", llm_colors={"content": "magenta", "reasoning": "off"})
+    buf = TTY()
+    LLMClient(cfg).render(resp, stream=buf)
+    assert buf.getvalue() == "\x1b[35mhello\x1b[0m\n"
+    buf2 = io.StringIO()
+    LLMClient(cfg).render(resp, stream=buf2)
+    assert buf2.getvalue() == "hello\n"
+
+
 def test_no_endpoint_raises():
     with pytest.raises(LLMError):
         LLMClient(Config())

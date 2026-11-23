@@ -7,6 +7,7 @@ import sys
 import urllib.request
 from dataclasses import dataclass, field
 
+from emerge_ai import ui
 from emerge_ai.config import Config, ConfigError, require_endpoint
 
 
@@ -89,12 +90,18 @@ class LLMClient:
             finish_reason=choice.get("finish_reason") or "",
         )
 
-    def render(self, resp: Response, stream=sys.stderr) -> None:
-        """Show reasoning only when verbose mode (-v/--verbose) enabled it; content always."""
+    def render(self, resp: Response, stream=None) -> None:
+        """Show reasoning only when verbose mode (-v/--verbose) enabled it; content always.
+        Colors come from cfg.llm_colors; non-TTY streams get plain text (spec: console-output)."""
+        stream = sys.stderr if stream is None else stream
+        palette = ui.resolve_palette(getattr(self.cfg, "llm_colors", None))
         if self.show_reasoning and resp.reasoning:
-            print(f"\033[2m[reasoning] {resp.reasoning}\033[0m", file=stream)
+            print(
+                ui.paint(stream, ui.color_sgr(palette["reasoning"]), f"[reasoning] {resp.reasoning}"),
+                file=stream,
+            )
         if resp.content:
-            print(resp.content, file=stream)
+            ui.paint_llm_block(resp.content, palette, stream)
 
 
 def run_tool_loop(

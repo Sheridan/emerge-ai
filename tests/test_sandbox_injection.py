@@ -60,6 +60,26 @@ def test_pretend_emerge_hypothesis(tmp_path, emerge_stub):
     assert "not allowed" in sb.pretend_emerge(["x"], env_overrides={"LD_PRELOAD": "/x"})["error"]
 
 
+def test_pretend_emerge_strips_ansi(tmp_path, emerge_stub, monkeypatch):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", "\x1b[31mblocked\x1b[0m by package.mask")
+    sb = Sandbox(roots=(str(tmp_path),), emerge_binary=binary)
+    res = sb.pretend_emerge(["app-misc/foo"])
+    assert "\x1b" not in res["output"]
+    assert "blocked by package.mask" in res["output"]
+
+
+def test_journal_search_strips_ansi(tmp_path, monkeypatch):
+    sb = Sandbox(roots=(str(tmp_path),))
+    monkeypatch.setattr(
+        sb,
+        "run_readonly",
+        lambda argv: {"returncode": 0, "output": "\x1b[32mok\x1b[0m merged\nlast\n"},
+    )
+    res = sb.journal_search("-n", "2")
+    assert res["output"] == "ok merged\nlast"
+
+
 def test_web_fetch_https_only(jail):
     assert "error" in jail.web_fetch("http://example.com")
     assert "error" in jail.web_fetch("file:///etc/passwd")

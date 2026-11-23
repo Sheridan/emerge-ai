@@ -9,6 +9,11 @@ from emerge_ai.cli import _etc_flow
 
 FIX = Path("tests/fixtures/etc")
 
+
+def test_decision_schema_demands_plain_reason():
+    msgs = etcupdate.build_merge_prompt("new", "cur", [])
+    assert "plain text, no markdown" in msgs[1]["content"]
+
 EMERGE_OUT = """ * --- Failed to merge /etc/ssh/sshd_config
  * Please move /var/tmp/... 
  * config protected: '/etc/ssh/sshd_config'
@@ -42,6 +47,24 @@ def test_show_diff(tmp_path):
     new.write_text("Port 2222\nKexAlgorithms x\n")
     diff = etcupdate.show_diff(str(new), str(cur))
     assert "+KexAlgorithms x" in diff and "---" in diff
+
+
+def test_show_diff_colors_on_tty_plain_on_pipe(tmp_path):
+    import io
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    cur = tmp_path / "sshd_config"
+    cur.write_text("Port 2222\n")
+    new = tmp_path / "._cfg0000_sshd_config"
+    new.write_text("Port 2222\nKexAlgorithms x\n")
+    colored = etcupdate.show_diff(str(new), str(cur), stream=TTY())
+    assert "\x1b[32m+KexAlgorithms x\x1b[0m" in colored
+    assert any("\x1b[31m" in l for l in colored.splitlines())
+    plain = etcupdate.show_diff(str(new), str(cur), stream=io.StringIO())
+    assert "\x1b" not in plain and "+KexAlgorithms x" in plain
 
 
 def test_parse_decision_validation():

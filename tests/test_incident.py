@@ -47,6 +47,17 @@ def test_build_incident_full_context():
     assert inc["argv"] == ["-a", "app-misc/foo"]
 
 
+def test_build_incident_strips_ansi_from_tail():
+    colored = (
+        "\x1b[1;31m * ERROR: app-misc/foo-1.2.3::gentoo failed (compile phase):\x1b[0m\n"
+        " * Build failure!\n * emake failed\n"
+    )
+    inc = build_incident(1, colored, [])
+    assert "\x1b" not in inc["stderr_tail"]
+    assert inc["class"] == "compile"
+    assert "emake failed" in inc["stderr_tail"]
+
+
 def test_build_incident_truncates_tail():
     inc = build_incident(1, "x" * 100000, [])
     assert len(inc["stderr_tail"]) == 4000

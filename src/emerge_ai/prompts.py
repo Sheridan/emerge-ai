@@ -13,6 +13,11 @@ ENV_RULES_DIR = "EMERGE_AI_PROMPTS_DIR"
 FALLBACK_RULES_DIR = "prompts"
 INSTALL_RULES_DIR = "/usr/share/emerge-ai/prompts"
 
+PLAIN_TEXT_DIRECTIVE = (
+    "Answer in plain text only, as if printed to a terminal: no markdown markup "
+    "(no headings, **bold**, *italics*, `code`, links, tables or rules)."
+)
+
 
 def rules_candidates() -> list[Path]:
     env = os.environ.get(ENV_RULES_DIR)

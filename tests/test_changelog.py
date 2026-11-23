@@ -6,6 +6,11 @@ import pytest
 from emerge_ai import changelog
 
 
+def test_change_system_requires_plain_text():
+    assert "plain text" in changelog.CHANGE_SYSTEM
+    assert "markdown" in changelog.CHANGE_SYSTEM
+
+
 def make_git_repo(tmp_path):
     repo = tmp_path / "upstream.git"
     subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)

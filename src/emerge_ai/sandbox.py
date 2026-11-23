@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path, PurePosixPath
 
+from emerge_ai import ui
+
 DEFAULT_JAIL_ROOTS = ("/var/tmp/portage", "/var/log/portage", "/var/lib/portage")
 MAX_BYTES = 128_000
 
@@ -115,7 +117,8 @@ class Sandbox:
         argv = ["journalctl", "--no-pager", "-o", "short-iso", *args]
         result = self.run_readonly(argv)
         if "output" in result:
-            result["output"] = "\n".join(result["output"].splitlines()[-max_lines:])
+            out = ui.strip_ansi(result["output"])
+            result["output"] = "\n".join(out.splitlines()[-max_lines:])
         return result
 
     # -------------------------------------------------------------------- web
@@ -157,9 +160,10 @@ class Sandbox:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"error": str(exc)}
+        out = ui.strip_ansi((proc.stdout or "") + (proc.stderr or ""))
         return {
             "returncode": proc.returncode,
             "argv": argv,
             "env_overrides": dict(env_overrides or {}),
-            "output": ((proc.stdout or "") + (proc.stderr or ""))[: self.max_bytes],
+            "output": out[: self.max_bytes],
         }

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
+
+from emerge_ai import ui
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 MERGE_TIME = re.compile(
@@ -41,13 +44,16 @@ def format_duration(seconds: int) -> str:
     return " ".join(parts) or "0s"
 
 
-def plan_digest(plan, estimate=genlop_estimate) -> str:
-    """Short human digest shown after emerge's own pretend output."""
+def plan_digest(plan, estimate=genlop_estimate, stream=None) -> str:
+    """Short human digest shown after emerge's own pretend output. Tier lines get
+    the fixed risk gradient when the stream is a color TTY (design D2)."""
+    stream = sys.stdout if stream is None else stream
     dist = plan.distribution
     lines = ["emerge-ai plan digest:"]
     for tier in sorted(dist):
         names = ", ".join(e.cpv for e in plan.entries if e.tier == tier)
-        lines.append(f"  tier {tier}: {dist[tier]} pkg(s) — {names}")
+        line = f"  tier {tier}: {dist[tier]} pkg(s) — {names}"
+        lines.append(ui.paint(stream, ui.color_sgr(ui.TIER_GRADIENT.get(tier)), line))
     total = 0
     unknown = 0
     for entry in plan.entries:

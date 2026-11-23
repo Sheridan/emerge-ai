@@ -1,4 +1,5 @@
 import builtins
+import io
 import json
 
 import pytest
@@ -7,6 +8,13 @@ from emerge_ai import cli, state
 from emerge_ai.flags import Mode
 from emerge_ai.plan import Plan, PlanEntry
 from emerge_ai.rollback import Protection
+
+
+@pytest.fixture(autouse=True)
+def _captured_output_is_always_plain(capsys):
+    yield
+    out, err = capsys.readouterr()
+    assert "\x1b" not in out and "\x1b" not in err, "capsys output must never carry ANSI codes"
 
 
 @pytest.fixture
@@ -230,6 +238,36 @@ def test_incident_consults_agent_and_prints_proposal(emerge_stub, ok_compat, mon
     assert seen and seen[0]["class"] == "sandbox"
     err = capsys.readouterr().err
     assert "consulting agent" in err and "PROPOSAL: add sandbox manifest" in err
+    assert "\x1b" not in err
+
+
+def test_agent_proposal_tty_gets_two_colors(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: write access denied: /usr/share/x")
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://localhost:1/v1", "model": "m"}')
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    tty = TTY()
+    monkeypatch.setattr(cli.sys, "stderr", tty)
+    rc = cli.main(
+        ["--noninteractive", "-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        config_path=str(cfg),
+        plan_fn=lambda a, s: None,
+        protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+        agent_fn=lambda inc: "PROPOSAL: relink\nQUESTION: which slot?",
+    )
+    assert rc == 1
+    err = tty.getvalue()
+    assert "\x1b[36mPROPOSAL: relink\x1b[0m" in err
+    assert "\x1b[33mQUESTION: which slot?\x1b[0m" in err
 
 
 def test_post_run_digest_on_success(emerge_stub, ok_compat, tmp_path, capsys):
@@ -264,3 +302,44 @@ def test_changelog_mode_local_news_only(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "OpenSSL upgrade needed" in out
+
+
+def test_status_messages_plain_under_capturing(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, _ = emerge_stub
+    rc = cli.main(
+        ["--resume"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: None,
+    )
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no incomplete emerge-ai run" in err and "\x1b" not in err
+
+
+def test_agent_error_red_on_tty_stderr(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: write access denied: /usr/share/x")
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text("{}")
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    tty = TTY()
+    monkeypatch.setattr(cli.sys, "stderr", tty)
+    rc = cli.main(
+        ["--noninteractive", "-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        config_path=str(cfg),
+        plan_fn=lambda a, s: None,
+        protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+    )
+    assert rc == 1
+    err = tty.getvalue()
+    assert "\x1b[31memerge-ai: no LLM endpoint configured" in err
+    assert "\x1b[0m" in err

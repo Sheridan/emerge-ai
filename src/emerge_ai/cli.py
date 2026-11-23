@@ -21,6 +21,7 @@ from emerge_ai import rollback as rollback_mod
 from emerge_ai.rollback import Protection
 from emerge_ai.runner import confirm, drop_flags, flag_present, run_emerge, run_emerge_capturing
 from emerge_ai.tiers import TierService, snapshot_required
+from emerge_ai import ui
 
 PRETEND_FLAGS = ("-p", "--pretend")
 ASK_FLAGS = ("-a", "--ask")
@@ -39,11 +40,11 @@ def _compat_gate() -> int | None:
     try:
         pv = portage_compat.portage_version()
     except portage_compat.PortageUnavailable as exc:
-        print(f"emerge-ai: {exc}", file=sys.stderr)
+        print(ui.err(exc), file=sys.stderr)
         return 3
     result = check_version_compat(pv, __version__)
     if not result.ok:
-        print(f"emerge-ai: {result.message}", file=sys.stderr)
+        print(ui.err(result.message), file=sys.stderr)
         return 4
     return None
 
@@ -54,7 +55,7 @@ def _make_tier_service(cfg: Config, cache_path=None, show_reasoning=False):
         try:
             client = LLMClient(cfg, show_reasoning=show_reasoning)
         except LLMError as exc:
-            print(f"emerge-ai: {exc}; tiers fall back to conservative", file=sys.stderr)
+            print(ui.warn(f"{exc}; tiers fall back to conservative"), file=sys.stderr)
     return TierService(client, cache_path=cache_path)
 
 
@@ -86,9 +87,9 @@ def _maybe_agent(run, config_path, agent_fn=None, show_reasoning=False) -> str |
     except (ConfigError, FileNotFoundError):
         return
     if not cfg.endpoint:
-        print("emerge-ai: no LLM endpoint configured; agent consultation skipped", file=sys.stderr)
+        print(ui.err("no LLM endpoint configured; agent consultation skipped"), file=sys.stderr)
         return None
-    print("emerge-ai: incident -> consulting agent (proposals only, nothing is executed)...",
+    print(ui.info("incident -> consulting agent (proposals only, nothing is executed)..."),
           file=sys.stderr)
     try:
         if agent_fn is not None:
@@ -105,10 +106,11 @@ def _maybe_agent(run, config_path, agent_fn=None, show_reasoning=False) -> str |
             proposal = agent.propose(
                 run.incident, render_to=sys.stderr if show_reasoning else None
             ).proposal
-        print(f"emerge-ai: agent proposal:\n{proposal}", file=sys.stderr)
+        print(ui.info("agent proposal:"), file=sys.stderr)
+        ui.paint_llm_block(proposal, cfg.llm_colors, sys.stderr)
         return proposal
     except Exception as exc:  # agent must never mask the original failure rc
-        print(f"emerge-ai: agent unavailable: {exc}", file=sys.stderr)
+        print(ui.err(f"agent unavailable: {exc}"), file=sys.stderr)
         return None
 
 
@@ -122,14 +124,14 @@ def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_
     paths = etcupdate.detect(run.incident.get("stderr_tail", ""))
     if not paths:
         return
-    print("emerge-ai: config-protect detected: " + ", ".join(paths), file=sys.stderr)
+    print(ui.warn("config-protect detected: " + ", ".join(paths)), file=sys.stderr)
     for newp in paths:
         try:
-            print(etcupdate.show_diff(newp), file=sys.stderr)
+            print(etcupdate.show_diff(newp, stream=sys.stderr), file=sys.stderr)
         except OSError as exc:
-            print(f"emerge-ai: no diff for {newp}: {exc}", file=sys.stderr)
+            print(ui.warn(f"no diff for {newp}: {exc}"), file=sys.stderr)
     if not llm or not cfg.etc_update_llm:
-        print("emerge-ai: etc_update_llm off or raw passthrough — showing diffs only, no actions",
+        print(ui.info("etc_update_llm off or raw passthrough — showing diffs only, no actions"),
               file=sys.stderr)
         return
     if client_factory is None:
@@ -149,22 +151,22 @@ def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_
             docs = etcupdate.collect_docs(current, web_fetch=web)
             decision = etcupdate.llm_decide(client_factory(cfg, show_reasoning=show_reasoning), newp, current, docs)
         except Exception as exc:
-            print(f"emerge-ai: etc LLM unavailable: {exc}", file=sys.stderr)
+            print(ui.err(f"etc LLM unavailable: {exc}"), file=sys.stderr)
             continue
-        print(f"emerge-ai: LLM decision: {decision['action']} — {decision.get('reason', '')}",
+        print(ui.info(f"LLM decision: {decision['action']} — {decision.get('reason', '')}"),
               file=sys.stderr)
         for c in decision.get("citations", []):
-            print(f"emerge-ai:   cite: {c}", file=sys.stderr)
+            print(ui.info(f"  cite: {c}"), file=sys.stderr)
         try:
-            ans = input_fn("Apply LLM decision [Y/n/c=override action[:file]]? ").strip()
+            ans = input_fn(ui.prompt("Apply LLM decision [Y/n/c=override action[:file]]? ")).strip()
             decision = etcupdate.parse_override(ans, decision)
         except EOFError:
             decision = {"action": "keep-current", "reason": "no input", "citations": ["prompt-eof"]}
         except ValueError as exc:
-            print(f"emerge-ai: bad override ({exc}); keeping current", file=sys.stderr)
+            print(ui.warn(f"bad override ({exc}); keeping current"), file=sys.stderr)
             decision = {"action": "keep-current", "reason": "bad override", "citations": ["user"]}
         res = etcupdate.apply_decision(newp, decision, confirm_fn=lambda _p: True)
-        print(f"emerge-ai: etc-update applied={res['applied']} action={res['action']}", file=sys.stderr)
+        print(ui.info(f"etc-update applied={res['applied']} action={res['action']}"), file=sys.stderr)
 
 
 
@@ -181,14 +183,16 @@ def _resolve_resume(emerge_args: list[str], mode, runs_dir) -> tuple[state.RunSt
         return run, emerge_args
     run = state.latest_incomplete(runs_dir)
     if run is None:
-        print("emerge-ai: --resume: no incomplete emerge-ai run; passing --resume to emerge",
+        print(ui.info("--resume: no incomplete emerge-ai run; passing --resume to emerge"),
               file=sys.stderr)
         run = state.new_run(emerge_args, mode)
         state.save_run(run, runs_dir)
         return run, emerge_args
     print(
-        f"emerge-ai: resuming run {run.run_id} (state {run.state}"
-        + (f", incident: {run.incident['class']})" if run.incident else ")"),
+        ui.info(
+            f"resuming run {run.run_id} (state {run.state}"
+            + (f", incident: {run.incident['class']})" if run.incident else ")")
+        ),
         file=sys.stderr,
     )
     return run, [a for a in emerge_args if a != "--resume"]
@@ -212,7 +216,10 @@ def _changelog_mode(config_path, show_reasoning=False) -> int:
     text = changelog.collect_digest(
         gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir, client=client
     )
-    print(text)
+    if client is not None:
+        ui.paint_llm_block(text, cfg.llm_colors, sys.stdout)
+    else:
+        print(text)
     return 0
 
 
@@ -308,12 +315,12 @@ def main(
         plan = plan_fn(emerge_args, tier_service)
         run.plan = [asdict(e) for e in plan.entries]
         state.save_run(run, runs_dir)
-        print(plan_digest(plan))
+        print(plan_digest(plan, stream=sys.stdout))
         if is_mass_update(emerge_args, plan):
-            for line in doctor_report(plan):
+            for line in doctor_report(plan, stream=sys.stderr):
                 print(line, file=sys.stderr)
     except Exception as exc:  # enrichment must never break emerge's own flow
-        print(f"emerge-ai: plan enrichment skipped: {exc}", file=sys.stderr)
+        print(ui.warn(f"plan enrichment skipped: {exc}"), file=sys.stderr)
 
     hooks.run_hook(output, mode)
 
@@ -321,12 +328,14 @@ def main(
         if mode.noninteractive:
             if not mode.responsibility:
                 print(
-                    "emerge-ai: --noninteractive: proceeding (autonomy matrix; "
-                    "tier gate re-checked before mutations)",
+                    ui.info(
+                        "--noninteractive: proceeding (autonomy matrix; "
+                        "tier gate re-checked before mutations)"
+                    ),
                     file=sys.stderr,
                 )
-        elif not confirm():
-            print("emerge-ai: aborted by user.", file=sys.stderr)
+        elif not confirm(ui.prompt("Proceed? [y/N] ")):
+            print(ui.info("aborted by user."), file=sys.stderr)
             state.transition(run, state.DONE, runs_dir)
             return 0
         merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
@@ -343,7 +352,7 @@ def main(
         else:
             prot = pfn(run, plan)
         for note in prot.notes:
-            print(f"emerge-ai: {note}", file=sys.stderr)
+            print(ui.info(note), file=sys.stderr)
         run.protection = {
             "snapshot": prot.snapshot,
             "archive": prot.archive_dir,
@@ -352,13 +361,15 @@ def main(
         state.save_run(run, runs_dir)
         if prot.failed and plan is not None and snapshot_required(plan.entries):
             print(
-                "emerge-ai: FAILED to create a recovery point for a tier<=4 queue.",
+                ui.err("FAILED to create a recovery point for a tier<=4 queue."),
                 file=sys.stderr,
             )
             if mode.noninteractive or not confirm(
-                "emerge-ai: merge without recovery point is unsafe. Proceed anyway? [y/N] "
+                ui.prompt(
+                    "emerge-ai: merge without recovery point is unsafe. Proceed anyway? [y/N] "
+                )
             ):
-                print("emerge-ai: aborted: no recovery point.", file=sys.stderr)
+                print(ui.err("aborted: no recovery point."), file=sys.stderr)
                 state.transition(run, state.DONE, runs_dir)
                 return 5
         state.transition(run, state.MERGE, runs_dir)
@@ -367,7 +378,7 @@ def main(
             run.incident = build_incident(rc, output, merge_args)
         if rc == 0 and (prot.snapshot or prot.archive_dir):
             for line in (cleanup_fn or rollback_mod.cleanup)(prot):
-                print(f"emerge-ai: {line}", file=sys.stderr)
+                print(ui.ok(line), file=sys.stderr)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
             run.agent_proposal = _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose)
