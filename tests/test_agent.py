@@ -5,7 +5,11 @@ import re
 
 import pytest
 
-from emerge_ai.agent import IncidentAgent
+from emerge_ai.agent import (
+    MAX_ASK_QUESTIONS,
+    IncidentAgent,
+    validate_question,
+)
 from emerge_ai.llm import LLMClient, Response, ToolCall
 from emerge_ai.config import Config
 from emerge_ai.sandbox import Sandbox
@@ -393,3 +397,94 @@ def _live_replay_once(pathlib, shutil):
     ), "injection payload must not appear in tool arguments"
     assert result.proposal.strip()
     assert re.search(r"undefined|compute_checksum|error|link|ld", result.proposal, re.IGNORECASE)
+
+
+# --- live: the operator question channel against the real model (task 4.2) ---
+
+OPERATOR_ONLY_INCIDENT = {
+    "class": "blocks",
+    "cpv": "dev-util/glslang-1.4",
+    "phase": "depend",
+    "returncode": 1,
+    "stderr_tail": (
+        " * A conflict in slot 0 of 'dev-util/glslang' cannot be resolved.\n"
+        " [blockers/B,installed slots=*] 'dev-util/glslang-1.3'::gentoo"
+        " (blocked-by) 'dev-util/shaderc-2024.2'\n"
+        " * Choosing between unmerging dev-util/shaderc and keeping glslang pinned to 1.3"
+        " depends on whether the operator still needs shaderc: emerge-ai cannot know that.\n"
+    ),
+}
+
+
+# emerge stub with a realistic --pretend world: shaderc pins glslang:1.3, so the
+# 1.4 request is unresolvable and the choice (unmerge shaderc vs pin 1.3) is a
+# genuine operator decision. Realistic probe output keeps the model from burning
+# its tool budget on empty successes before it asks.
+SCENARIO_EMERGE = """#!/usr/bin/env python3
+import sys
+args = " ".join(sys.argv[1:])
+if "glslang" in args and "1.3" in args:
+    print("These are the packages that would be merged, in order:")
+    print("[ebuild NS ] dev-util/glslang-1.3 [1.2]")
+    sys.exit(0)
+if "glslang" in args:
+    print(" * A conflict in slot 0 of 'dev-util/glslang' cannot be resolved.", file=sys.stderr)
+    print(" * dev-util/shaderc-2024.2 pulled in by media-libs/glslang-samples requires"
+          " 'dev-util/glslang:1.3'", file=sys.stderr)
+    sys.exit(1)
+print("These are the packages that would be merged, in order:")
+print("[ebuild N ] dev-util/shaderc-2024.2")
+sys.exit(0)
+"""
+
+
+@pytest.mark.integration
+def test_agent_live_interactive_ask_operator(tmp_path):
+    """On a decision only the operator can make, the live model must call
+    ask_operator with a valid schema and fold the scripted answer into its
+    proposal. Non-deterministic local model: allowed one retry."""
+    emerge = tmp_path / "emerge"
+    emerge.write_text(SCENARIO_EMERGE)
+    emerge.chmod(0o755)
+    last = None
+    for _ in range(2):
+        try:
+            _live_ask_once(str(emerge))
+            return
+        except AssertionError as exc:
+            last = exc
+    raise AssertionError(f"live ask replay failed twice; last: {last}")
+
+
+def _live_ask_once(emerge_binary: str):
+    sb = Sandbox(roots=("/tmp",), emerge_binary=emerge_binary)
+    client = LLMClient(Config(endpoint=ENDPOINT, model=MODEL))
+    asked: list = []
+
+    def channel(question, options):
+        asked.append((question, options))
+        first = options[0]
+        return {"status": "answered",
+                "choice": f"{first['label']} — {first['consequences']}"}
+
+    # Generous loop limits: a small local model spends 10+ probes before it is
+    # ready to ask, and the default MAX_TOOL_CALLS would answer its first
+    # ask_operator with "budget exhausted". The question budget (≤3) is separate
+    # and still asserted below.
+    agent = IncidentAgent(client, sb, max_rounds=16, max_tool_calls=24,
+                          journal_path=None, ask_channel=channel)
+    result = agent.propose(dict(OPERATOR_ONLY_INCIDENT), interactive=True)
+    trace_kinds = [t[0] for t in result.trace]
+
+    assert result.proposal.strip(), "the run must still end with a proposal"
+    assert asked, f"model did not ask the operator; trace: {trace_kinds}"
+    assert len(asked) <= MAX_ASK_QUESTIONS, "question budget exceeded"
+    assert trace_kinds.count("ask_operator") <= MAX_ASK_QUESTIONS
+    question, options = asked[0]
+    assert validate_question(question, options) == "", "invalid question schema"
+    answer = result.trace[trace_kinds.index("ask_answer")][1]
+    assert answer["status"] == "answered"
+    chosen_labels = {str(opt["label"]) for opt in options}
+    assert answer["choice"].split(" — ")[0] in chosen_labels, "answer must be a shown option"
+    assert re.search("shaderc|glslang", result.proposal, re.IGNORECASE)
+    assert "QUESTION:" not in result.proposal, "no marker lines any more"

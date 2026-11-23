@@ -165,10 +165,11 @@ ASK_TOOL_SPEC = {
 # Mode directives (design D7): the QUESTION: marker and "never wait for the
 # answer" are gone — interactive runs get a real channel, quiet runs do not ask.
 ASK_DIRECTIVE_INTERACTIVE = (
-    "If only the operator can supply a missing fact, ask with the ask_operator tool: "
-    "one question per call, 1 to 6 numbered options, each option already checked with "
-    "pretend_emerge where it changes dependency resolution and its consequences spelled "
-    "out. Wait for the answer and continue the analysis with it."
+    "If the outcome depends on a fact only the operator knows (whether they still need a "
+    "package, which breakage to accept), you MUST ask before writing 'PROPOSAL:' — use the "
+    "ask_operator tool: one question per call, 1 to 6 numbered options stating their "
+    "consequences, each option checked once with pretend_emerge where it changes dependency "
+    "resolution and no further; then wait for the answer and continue the analysis with it."
 )
 ASK_DIRECTIVE_QUIET = (
     "Do not ask the operator anything — this run is not interactive. Make the "
