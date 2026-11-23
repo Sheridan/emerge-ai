@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-OWN_FLAGS = ("--noninteractive", "--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences")
+OWN_FLAGS = ("--noninteractive", "--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences", "--changelog")
 OWN_FLAG_HELP = """emerge-ai own flags (everything else is passed to emerge verbatim):
   --noninteractive    no TTY questions; autonomy matrix decides, fail-closed otherwise
   --i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences
                       full autonomy including rollback execution
+  --changelog           changelog digest (news/GLESA/GitHub/git) instead of emerging
 """
 
 
@@ -16,6 +17,7 @@ OWN_FLAG_HELP = """emerge-ai own flags (everything else is passed to emerge verb
 class Mode:
     noninteractive: bool = False
     responsibility: bool = False
+    changelog: bool = False
 
 
 def parse_own_flags(argv: list[str]) -> tuple[Mode, list[str]]:
@@ -27,6 +29,8 @@ def parse_own_flags(argv: list[str]) -> tuple[Mode, list[str]]:
             mode.noninteractive = True
         elif arg == OWN_FLAGS[1]:
             mode.responsibility = True
+        elif arg == OWN_FLAGS[2]:
+            mode.changelog = True
         else:
             rest.append(arg)
     return mode, rest

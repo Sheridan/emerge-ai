@@ -18,6 +18,10 @@ DEFAULTS = {
     "language": "auto",
     "web_access": True,
     "etc_update_llm": True,
+    "post_run_digest": True,
+    "gh_repos": [],
+    "git_urls": [],
+    "news_dir": "/var/lib/eselect-news/news",
 }
 
 
@@ -34,6 +38,10 @@ class Config:
     language: str = "auto"
     web_access: bool = True
     etc_update_llm: bool = True
+    post_run_digest: bool = True
+    gh_repos: list = field(default_factory=list)
+    git_urls: list = field(default_factory=list)
+    news_dir: str = "/var/lib/eselect-news/news"
     source: str | None = field(default=None, compare=False)
 
     @classmethod

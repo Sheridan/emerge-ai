@@ -13,7 +13,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
-from emerge_ai import etcupdate
+from emerge_ai import changelog, digest, etcupdate
 from emerge_ai.incident import build_incident
 from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan
@@ -77,15 +77,15 @@ def _default_protect(run, plan) -> Protection:
     return rollback_mod.protect(run.run_id, plan, contents_fn=portage_compat.vdb_contents)
 
 
-def _maybe_agent(run, config_path, agent_fn=None) -> None:
+def _maybe_agent(run, config_path, agent_fn=None) -> str | None:
     if not run.incident or run.incident.get("class") == "plan-failed":
-        return
+        return None
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
         return
     if not cfg.endpoint:
-        return
+        return None
     print("emerge-ai: incident -> consulting agent (proposals only, nothing is executed)...",
           file=sys.stderr)
     try:
@@ -102,8 +102,10 @@ def _maybe_agent(run, config_path, agent_fn=None) -> None:
             )
             proposal = agent.propose(run.incident).proposal
         print(f"emerge-ai: agent proposal:\n{proposal}", file=sys.stderr)
+        return proposal
     except Exception as exc:  # agent must never mask the original failure rc
         print(f"emerge-ai: agent unavailable: {exc}", file=sys.stderr)
+        return None
 
 
 def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_factory=None) -> None:
@@ -162,6 +164,28 @@ def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_
 
 
 
+def _post_run_digest(run, output, config_path, runs_dir) -> None:
+    try:
+        cfg = load_config(config_path)
+    except (ConfigError, FileNotFoundError):
+        cfg = Config()
+    if cfg.post_run_digest:
+        print(digest.post_run_digest(run, output), file=sys.stderr)
+
+
+def _changelog_mode(config_path) -> int:
+    try:
+        cfg = load_config(config_path)
+    except (ConfigError, FileNotFoundError):
+        cfg = Config()
+    client = LLMClient(cfg) if cfg.endpoint else None
+    text = changelog.collect_digest(
+        gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir, client=client
+    )
+    print(text)
+    return 0
+
+
 def main(
     argv: list[str] | None = None,
     emerge_binary: str = "emerge",
@@ -190,6 +214,9 @@ def main(
         return 0
 
     mode, emerge_args = parse_own_flags(argv)
+
+    if mode.changelog:
+        return _changelog_mode(config_path)
 
     blocked = _compat_gate()
     if blocked is not None:
@@ -224,8 +251,11 @@ def main(
             run.incident = build_incident(rc, output, emerge_args)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
-            _maybe_agent(run, config_path, agent_fn)
+            run.agent_proposal = _maybe_agent(run, config_path, agent_fn)
             _etc_flow(run, config_path, confirm_fn=lambda _p: False, llm=False)
+        else:
+            _post_run_digest(run, output, config_path, runs_dir)
+        state.save_run(run, runs_dir)
         return rc
 
     if run.state == state.VERSION_CHECK:
@@ -308,8 +338,11 @@ def main(
                 print(f"emerge-ai: {line}", file=sys.stderr)
         state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
         if rc != 0:
-            _maybe_agent(run, config_path, agent_fn)
+            run.agent_proposal = _maybe_agent(run, config_path, agent_fn)
             _etc_flow(run, config_path, confirm_fn=confirm)
+        else:
+            _post_run_digest(run, output, config_path, runs_dir)
+        state.save_run(run, runs_dir)
         return rc
 
     state.transition(run, state.DONE, runs_dir)

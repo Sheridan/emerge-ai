@@ -215,3 +215,37 @@ def test_incident_consults_agent_and_prints_proposal(emerge_stub, ok_compat, mon
     assert seen and seen[0]["class"] == "sandbox"
     err = capsys.readouterr().err
     assert "consulting agent" in err and "PROPOSAL: add sandbox manifest" in err
+
+
+def test_post_run_digest_on_success(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, calls = emerge_stub
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"post_run_digest": true}')
+    rc = cli.main(["app-misc/foo"], str(binary), config_path=str(cfg),
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "run digest:" in err
+    assert "STUB-OK" in err or "built/installed" in err
+
+
+def test_post_run_digest_off(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, calls = emerge_stub
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"post_run_digest": false}')
+    rc = cli.main(["app-misc/foo"], str(binary), config_path=str(cfg),
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    assert rc == 0
+    assert "run digest:" not in capsys.readouterr().err
+
+
+def test_changelog_mode_local_news_only(tmp_path, capsys):
+    news = tmp_path / "news"
+    news.mkdir()
+    (news / "2026-01-01-openssl.news").write_text("Title: OpenSSL upgrade needed\nDo things.\n")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"news_dir": str(news), "gh_repos": [], "git_urls": []}))
+    rc = cli.main(["--changelog"], "emerge", config_path=str(cfg), runs_dir=str(tmp_path))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "OpenSSL upgrade needed" in out

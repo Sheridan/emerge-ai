@@ -44,6 +44,7 @@ class RunState:
     plan: list = field(default_factory=list)
     incident: dict | None = None
     protection: dict | None = None
+    agent_proposal: str | None = None
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 
