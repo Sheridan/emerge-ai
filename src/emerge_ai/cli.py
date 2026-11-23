@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import asdict
 
@@ -108,7 +109,7 @@ def main(
     emerge_binary: str = "emerge",
     *,
     config_path: str = "/etc/portage/emerge-ai.json",
-    runs_dir: str = state.RUNS_DIR,
+    runs_dir: str | None = None,
     tiers_cache: str = "/var/lib/emerge-ai/tiers.json",
     plan_fn=build_plan,
     protect_fn=None,
@@ -117,6 +118,8 @@ def main(
 ) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    runs_dir = runs_dir or os.environ.get("EMERGE_AI_RUNS_DIR") or state.RUNS_DIR
+    tiers_cache = os.environ.get("EMERGE_AI_TIERS_CACHE") or tiers_cache
 
     if argv and argv[0] in ("--version", "-V"):
         text, code = _version_text()
