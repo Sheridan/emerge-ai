@@ -5,7 +5,7 @@
   "language": "auto",
   "show_digest": true,
   "etc_update_after_build": true,
-  "changelog_digest": true,
+  "changelog_digest": false,
   "agent": {
     "web_access": true
   }
