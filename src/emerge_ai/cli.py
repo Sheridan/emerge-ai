@@ -415,7 +415,13 @@ def main(
     except Exception as exc:  # enrichment must never break emerge's own flow
         print(ui.warn(f"plan enrichment skipped: {exc}"), file=sys.stderr)
 
-    if ask:
+    if ask and pretend:
+        # pretend dominates (spec: cli-compat): plan-only, question-free, merge
+        # is never reachable with --pretend, even combined with --ask
+        print(ui.info("--pretend takes precedence over --ask: plan shown, merge not started"),
+              file=sys.stderr)
+
+    if ask and not pretend:
         if mode.noninteractive:
             if not mode.responsibility:
                 print(

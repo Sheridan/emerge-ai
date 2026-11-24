@@ -61,6 +61,45 @@ def test_ask_flag_never_reaches_emerge_plan_phase(emerge_stub, ok_compat, monkey
         assert "-a" not in call and "--ask" not in call
 
 
+def _no_stdin(monkeypatch):
+    def boom(prompt=""):
+        raise AssertionError("question must not be asked when --pretend wins")
+
+    monkeypatch.setattr(builtins, "input", boom)
+
+
+def test_ask_pretend_combo_never_merges_or_asks(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    _no_stdin(monkeypatch)
+    rc = cli.main(["-a", "-p", "sys-apps/foo"], emerge_binary=binary,
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    assert rc == 0
+    assert calls() == [["-p", "sys-apps/foo"]]  # -a dropped, -p kept, single plan-phase call
+    out = capsys.readouterr()
+    assert "STUB-OUT" in out.out  # pretend output printed verbatim
+    assert "--pretend takes precedence over --ask" in out.err
+
+
+def test_ask_pretend_cluster_and_order_equivalent(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    _no_stdin(monkeypatch)
+    assert cli.main(["-ap", "sys-apps/foo"], emerge_binary=binary,
+                    runs_dir=str(tmp_path), plan_fn=lambda a, s: None) == 0
+    assert cli.main(["-p", "-a", "sys-apps/foo"], emerge_binary=binary,
+                    runs_dir=str(tmp_path), plan_fn=lambda a, s: None) == 0
+    assert calls() == [["-p", "sys-apps/foo"], ["-p", "sys-apps/foo"]]  # one plan call each, no merge
+
+
+def test_ask_pretend_propagates_plan_failure(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    _no_stdin(monkeypatch)
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "1")
+    rc = cli.main(["-a", "-p", "sys-apps/foo"], emerge_binary=binary,
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    assert rc == 1
+    assert calls() == [["-p", "sys-apps/foo"]]  # incident path, still no merge attempt
+
+
 def test_ask_eof_denied(emerge_stub, ok_compat, monkeypatch, tmp_path):
     binary, calls = emerge_stub
 

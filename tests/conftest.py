@@ -43,7 +43,7 @@ err = os.environ.get("EMERGE_STUB_ERR")
 if err:
     print(err, file=sys.stderr)
 rc = os.environ.get("EMERGE_STUB_RC", "0")
-if "--pretend" in sys.argv:
+if "--pretend" in sys.argv or "-p" in sys.argv:
     rc = os.environ.get("EMERGE_STUB_PRETEND_RC", rc)
 sys.exit(int(rc))
 """

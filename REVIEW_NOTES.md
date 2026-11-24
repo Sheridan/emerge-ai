@@ -15,7 +15,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
 
 ## H — требует решения
 
-### H1. `-a -p` вместе: после «Proceed? y» запускается РЕАЛЬНЫЙ merge
+### H1. `-a -p` вместе: после «Proceed? y» запускается РЕАЛЬНЫЙ merge — закрыто (change `fix-ask-pretend-combo`)
 - `src/emerge_ai/cli.py:361-375`: при комбинации `-a --pretend` фаза плана честно
   отрабатывает в pretend, но после подтверждения `merge_args = drop_flags(emerge_args,
   ASK_FLAGS + PRETEND_FLAGS)` снимает **оба** флага и запускает настоящий merge.
