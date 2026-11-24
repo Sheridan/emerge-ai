@@ -193,7 +193,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   инъектируемость, которой нет (тесты патчат `builtins.input`). Убрать параметр или
   читать из stream.
 
-### L3. Покрытие: нет тестов на `config_edit.py` и на связку `-a -p`
+### L3. Покрытие: нет тестов на `config_edit.py` и на связку `-a -p` — закрыто (change `cover-config-edit-and-ask-pretend`)
 - `config_edit.py` (запись в `/etc/portage/{package.accept_keywords,package.use,...}`,
   аудит-комментарии) — единственный модуль src без единого теста. Пока он не подключён
   к CLI (см. H5), но починить при подключении лестницы обязательно.

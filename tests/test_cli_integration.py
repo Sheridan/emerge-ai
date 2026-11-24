@@ -623,3 +623,38 @@ def test_post_run_changelog_not_called_on_failure(emerge_stub, ok_compat, monkey
     rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 1
+
+
+def test_ask_pretend_records_plan_and_never_merges(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    """cli-compat «Связка -a -p не устанавливает»: план сохраняется, merge нет."""
+    import builtins
+
+    from emerge_ai.plan import Plan, PlanEntry
+
+    binary, calls = emerge_stub
+    monkeypatch.setattr(builtins, "input", lambda prompt="": pytest.fail("stdin read"))
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    plan = Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")])
+    rc = cli.main(["-a", "-p", "app-misc/foo"], str(binary), config_path=str(_changelog_cfg(tmp_path)),
+                  runs_dir=str(runs), plan_fn=lambda a, s: plan)
+    assert rc == 0
+    assert calls() == [["-p", "app-misc/foo"]]  # single resolve, no merge run
+    out = capsys.readouterr()
+    assert "Proceed?" not in out.err and "emerge-ai plan digest:" in out.out
+    saved = [state.load_run(p.stem, runs_dir=runs) for p in runs.glob("*.json")]
+    assert any(r.plan and r.plan[0]["cpv"] == "app-misc/foo-1.0" for r in saved)
+
+
+def test_ask_pretend_plan_failure_persists_incident(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    """cli-compat «Кластер -ap»/провал плана: incident plan-failed, rc передан."""
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "7")
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    rc = cli.main(["-ap", "app-misc/foo"], str(binary), config_path=str(_changelog_cfg(tmp_path)),
+                  runs_dir=str(runs), plan_fn=lambda a, s: None)
+    assert rc == 7
+    assert calls() == [["-p", "app-misc/foo"]]  # no second (merge) run
+    saved = [state.load_run(p.stem, runs_dir=runs) for p in runs.glob("*.json")]
+    assert any(r.incident and r.incident["class"] == "plan-failed" for r in saved)
