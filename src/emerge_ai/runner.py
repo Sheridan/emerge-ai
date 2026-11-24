@@ -26,10 +26,13 @@ def with_color_flag(emerge_args: list[str], stream=None) -> list[str]:
 
 
 def run_emerge_capturing(
-    emerge_args: list[str], emerge_binary: str = EMERGE, stdout_stream=None
+    emerge_args: list[str], emerge_binary: str = EMERGE, stdout_stream=None,
+    env: dict | None = None,
 ) -> tuple[int, str]:
     """Run emerge (typically --pretend), mirroring output while buffering it
-    for incident parsing and enrichment. No TTY is attached. emerge's stdout
+    for incident parsing and enrichment. No TTY is attached. `env` layers
+    one-off overrides (repair-ladder env level) over the current environment.
+    emerge's stdout
     mirrors to our stdout (or `stdout_stream`, used by the mutation-path plan
     phase to keep stdout a pure merge passthrough) and its stderr to our
     stderr, byte-for-byte
@@ -41,6 +44,7 @@ def run_emerge_capturing(
         [emerge_binary, *with_color_flag(emerge_args)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env={**os.environ, **env} if env else None,
     )
     # Decode per line against the console encoding with "replace": one stray
     # byte must not abort the run before proc.wait() and the incident report.

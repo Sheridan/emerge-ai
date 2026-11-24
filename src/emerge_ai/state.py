@@ -49,6 +49,7 @@ class RunState:
     agent_proposal: str | None = None
     changelog: str | None = None
     rollback: str | None = None  # rollback channel outcome (wire-rollback-channel)
+    repair: list = field(default_factory=list)  # applied repair cycles (wire-agent-apply-loop)
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 

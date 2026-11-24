@@ -175,3 +175,31 @@ sudo emerge-ai --rollback
 #     «n» → артефакты сохранены; в --noninteractive — подсказка --rollback
 # 3) sudo emerge-ai --noninteractive --rollback  → отказ + ручная инструкция, rc 5
 ```
+
+## Петля починки после сбоя (wire-agent-apply-loop)
+
+```bash
+# 1) интерактив: реальный сбой merge (например, снятый пакет с удалённого зеркала)
+sudo emerge-ai --ask category/pkg
+#   → после сбоя: proposal агента + «consent gate» с пронумерованными вариантами;
+#     «1» → «applied repair variant [retry], retrying emerge» в stderr и повтор
+#     emerge; «q» → «consent gate: quit — system untouched», rc = коду сбоя emerge
+
+# 2) rest-tier в неинтерактиве — применение без вопроса
+sudo emerge-ai --noninteractive app-misc/small   # при воспроизводимом сбое merge
+#   → «autonomy matrix: --noninteractive: rest-tier ...» + «applied repair variant»,
+#     строка decision в /var/log/emerge-ai/decisions.log
+
+# 3) tier 1–4 без флага — отказ, система не тронута
+sudo emerge-ai --noninteractive sys-apps/critical
+#   → «consent gate: auto-repair refused at tiers ...», предложение в выводе,
+#     emerge не повторялся, rc = коду сбоя
+
+# 4) лимит циклов: два неудачных повтора подряд
+#   → «agent loop: repair limit (2 apply->retry cycles) reached; showing the
+#     final report only», третий цикл агента не запускается, rc последнего сбоя;
+#     в /var/lib/emerge-ai/runs/<id>.json поле "repair" с обеими попытками
+
+# 5) без endpoint в конфиге петля не включается вовсе: после сбоя нет ни
+#    «consent gate», ни вопросов — только proposal/отчёт как раньше
+```

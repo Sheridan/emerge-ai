@@ -17,7 +17,9 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
-from emerge_ai import changelog, digest, etcupdate, gate as gate_mod, init_check
+from emerge_ai import changelog, config_edit, digest, etcupdate
+from emerge_ai import gate as gate_mod, init_check
+from emerge_ai import overlay as overlay_mod
 from emerge_ai.incident import build_incident
 from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan, build_plan_from_output
@@ -223,6 +225,162 @@ def _offer_rollback(
         print(ui.info(f"rollback channel: {run.rollback}"), file=sys.stderr)
 
 
+REPAIR_LIMIT = 2  # apply->retry cycles per run (spec: agent-loop-consent)
+
+
+def _variant_tiers(spec: dict, plan) -> tuple:
+    """Risk tier of a whitelist variant: the queue/packages it touches when
+    known, conservative (1) when the plan or the target is unknown."""
+    from emerge_ai.plan import package_of
+
+    if plan is None:
+        return (1,)
+    action = spec.get("action") or {}
+    keys = set()
+    if action.get("type") == "overlay-copy":
+        keys.add(package_of(action["cpv"]))
+    for line in action.get("lines", []):
+        keys.add(package_of(line))
+    tiers = [e.tier for e in plan.entries if not keys or package_of(e.cpv) in keys]
+    return (max(tiers),) if tiers else (1,)
+
+
+def _apply_action(action: dict, *, run, etc_dir: str = "/etc/portage", overlay_root=None) -> None:
+    """Whitelist interpreter — the only code mutating the system in the repair
+    loop; model output is never read here, actions are built by typed_variants."""
+    t = (action or {}).get("type", "retry")
+    if t in ("retry", "env-retry"):
+        return  # the change happens through the retried emerge call
+    if t == "package-edit":
+        # idempotent: existing (commented) line with the same directive is skipped
+        for line in action["lines"]:
+            want = line.split()
+            etc = Path(etc_dir)
+            if etc.is_dir():
+                dup = any(
+                    ln.strip() and not ln.lstrip().startswith("#") and
+                    ln.split()[: len(want)] == want
+                    for f in etc.rglob("*") if f.is_file()
+                    for ln in f.read_text(errors="ignore").splitlines()
+                )
+                if dup:
+                    print(ui.info(f"package.{action['kind']}: '{line}' already present — skipped"),
+                          file=sys.stderr)
+                    continue
+            config_edit.apply_package_edit(
+                action["kind"], line, reason=action["reason"],
+                journal_id=run.run_id, etc_dir=etc_dir,
+            )
+        return
+    if t == "overlay-copy":
+        cpv = action["cpv"]
+        cat, pn, _pv = overlay_mod._split_cpv(cpv)
+        import portage  # production-only path: tests inject the seam
+
+        src = Path(portage.settings["PORTDIR"]) / cat / pn
+        kwargs = {"reason": "emerge-ai repair copy", "journal_id": run.run_id}
+        if overlay_root:
+            kwargs["repo_root"] = overlay_root
+        overlay_mod.add_package(cpv, source_dir=src, **kwargs)
+        return
+    raise ValueError(f"unknown repair action {t!r}")  # fail-closed, never executed
+
+
+def _incident_flow(
+    run,
+    mode,
+    plan,
+    *,
+    audit_path,
+    etc_dir: str = "/etc/portage",
+    overlay_root=None,
+    gate_fn=None,
+    confirm_fn=confirm,
+    input_fn=None,
+    interactive: bool = False,
+) -> dict | None:
+    """Typed variants -> consent gate (autonomy matrix when not interactive:
+    --noninteractive or no terminal) -> apply one. Returns the applied spec
+    (its action["env"] may modify the retry), or None — advisory stays the
+    floor in every refusal."""
+    if len(run.repair) >= REPAIR_LIMIT:
+        print(
+            ui.warn(
+                f"agent loop: repair limit ({REPAIR_LIMIT} apply->retry cycles) reached; "
+                "showing the final report only"
+            ),
+            file=sys.stderr,
+        )
+        return None
+    from emerge_ai.agent import typed_variants
+
+    specs = typed_variants(run.incident or {})
+    mode_dict = asdict(mode)
+
+    def bound(spec):
+        def _go():
+            _apply_action(spec["action"], run=run, etc_dir=etc_dir, overlay_root=overlay_root)
+            run.repair.append({"attempt": len(run.repair) + 1, "variant": spec["key"]})
+            print(ui.ok(f"applied repair variant [{spec['key']}], retrying emerge"), file=sys.stderr)
+
+        return _go
+
+    variants = []
+    for s in specs:
+        tiers = _variant_tiers(s, plan)
+        variants.append(
+            gate_mod.Variant(
+                key=s["key"], title=s["title"], pros=[s.get("rationale", "")], cons=[],
+                risks=[f"affects tier {tiers[0]}"], kind="fix", tiers=tiers,
+                action=bound(s),
+            )
+        )
+    try:
+        if not interactive:
+            # matrix path: never blocks on a terminal that isn't there
+            autos = [
+                (s, v)
+                for s, v in zip(specs, variants)
+                if gate_mod.autonomy_decision(mode_dict, v)[0] == gate_mod.AUTO
+            ]
+            if not autos:
+                print(
+                    ui.info(
+                        "consent gate: auto-repair refused at tiers "
+                        f"{_variant_tiers(specs[0], plan)} — run interactively or pass "
+                        "--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences"
+                    ),
+                    file=sys.stderr,
+                )
+                return None  # matrix denies: advisory as before
+            spec, v = autos[-1]  # most specific fix (retry is always first)
+            verdict, reason = gate_mod.autonomy_decision(mode_dict, v)
+            if not gate_mod.audit(
+                {"mode": mode_dict, "variant": v.key, "kind": "fix",
+                 "decision": "apply", "autonomy": verdict, "reason": reason},
+                audit_path,
+            ):
+                print(ui.warn("repair: decision audit unwritable — fail-closed, nothing applied"),
+                      file=sys.stderr)
+                return None
+            v.action()
+            print(ui.info(f"autonomy matrix: {reason}"), file=sys.stderr)
+            return spec
+        decision = (gate_fn or gate_mod.gate)(
+            variants, mode=mode_dict, confirm_fn=confirm_fn,
+            input_fn=input_fn or (lambda prompt: input(prompt)),  # patchable at call time
+            audit_path=audit_path,
+        )
+        if decision.get("status") != "applied":
+            print(ui.info(f"consent gate: {decision.get('status')} — system untouched"),
+                  file=sys.stderr)
+            return None
+        return next(sp for sp in specs if sp["key"] == decision.get("variant"))
+    except Exception as exc:  # the loop must never mask the original failure
+        print(ui.err(f"repair loop skipped: {exc}"), file=sys.stderr)
+        return None
+
+
 def _stdin_is_tty() -> bool:
     """Interactive means a real terminal on stdin; captured or closed stdin is not."""
     try:
@@ -258,8 +416,8 @@ def _maybe_agent(
     if not cfg.endpoint:
         print(ui.err("no LLM endpoint configured; agent consultation skipped"), file=sys.stderr)
         return None
-    print(ui.info("incident -> consulting agent (proposals only, nothing is executed)..."),
-          file=sys.stderr)
+    print(ui.info("incident -> consulting agent (proposal is advisory; executable "
+                  "whitelist variants follow below)..."), file=sys.stderr)
     try:
         if agent_fn is not None:
             proposal = _call_agent_fn(agent_fn, run.incident, interactive)
@@ -478,6 +636,10 @@ def main(
     protection_list_fn=None,
     rollback_fn=None,
     rollback_executor=None,
+    gate_fn=None,
+    confirm_fn=confirm,
+    input_fn=None,
+    etc_dir: str = "/etc/portage",
 ) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -546,7 +708,7 @@ def main(
     rc, output = run_emerge_capturing(
         plan_args, emerge_binary=emerge_binary, stdout_stream=plan_stream
     )
-    if rc != 0:
+    while rc != 0:  # repair loop for the resolve phase (wire-agent-apply-loop)
         incident = build_incident(rc, output, plan_args)
         incident["class"] = "plan-failed"
         run.incident = incident
@@ -554,11 +716,29 @@ def main(
             state.transition(run, state.INCIDENT, runs_dir)
         else:
             state.save_run(run, runs_dir)
-        run.agent_proposal = _maybe_agent(
+        proposal = _maybe_agent(
             run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
         )
+        run.agent_proposal = proposal
+        applied = None
+        if proposal is not None:
+            # the loop is engaged only when the agent layer took part; with no
+            # agent the CLI keeps its pre-loop, purely consultative behaviour
+            applied = _incident_flow(
+                run, mode, None,
+                audit_path=audit_path or gate_mod.AUDIT_PATH,
+                etc_dir=etc_dir, gate_fn=gate_fn, input_fn=input_fn,
+                confirm_fn=confirm_fn,
+                interactive=interactive,
+            )
+        if applied is None:
+            state.save_run(run, runs_dir)
+            return rc
         state.save_run(run, runs_dir)
-        return rc
+        rc, output = run_emerge_capturing(
+            plan_args, emerge_binary=emerge_binary, stdout_stream=plan_stream,
+            env=(applied.get("action") or {}).get("env"),
+        )
 
     plan = None
     try:
@@ -662,16 +842,37 @@ def main(
     merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
     state.transition(run, state.MERGE, runs_dir)
     rc, output = run_emerge_capturing(merge_args, emerge_binary=emerge_binary)
-    if rc != 0:
+    while rc != 0:  # failure -> agent -> consent gate -> apply -> retry (spec: agent-loop-consent)
         run.incident = build_incident(rc, output, merge_args)
-    if rc == 0 and (prot.snapshot or prot.archive_dir):
-        for line in (cleanup_fn or rollback_mod.cleanup)(prot):
-            print(ui.ok(line), file=sys.stderr)
-    state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
-    if rc != 0:
-        run.agent_proposal = _maybe_agent(
+        state.transition(run, state.INCIDENT, runs_dir)
+        proposal = _maybe_agent(
             run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
         )
+        run.agent_proposal = proposal
+        applied = None
+        if proposal is not None:
+            applied = _incident_flow(
+                run, mode, plan,
+                audit_path=audit_path or gate_mod.AUDIT_PATH,
+                etc_dir=etc_dir, gate_fn=gate_fn, input_fn=input_fn,
+                confirm_fn=confirm_fn,
+                interactive=interactive,
+            )
+        if applied is None:
+            break
+        state.transition(run, state.MERGE, runs_dir)  # INCIDENT -> MERGE exists
+        rc, output = run_emerge_capturing(
+            merge_args, emerge_binary=emerge_binary,
+            env=(applied.get("action") or {}).get("env"),
+        )
+        run.repair[-1]["retry_rc"] = rc
+    if rc == 0:
+        if prot.snapshot or prot.archive_dir:
+            for line in (cleanup_fn or rollback_mod.cleanup)(prot):
+                print(ui.ok(line), file=sys.stderr)
+        state.transition(run, state.DONE, runs_dir)
+        _post_run_digest(run, output, config_path, runs_dir)
+    else:  # run stays in INCIDENT: advisory report, rollback offer, etc flow
         _offer_rollback(
             mode,
             prot,
@@ -683,8 +884,6 @@ def main(
             _etc_flow(run, config_path, show_reasoning=verbose)
         else:
             _etc_flow(run, config_path, llm=False)
-    else:
-        _post_run_digest(run, output, config_path, runs_dir)
     state.save_run(run, runs_dir)
     return rc
 

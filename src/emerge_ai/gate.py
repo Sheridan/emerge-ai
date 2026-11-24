@@ -101,9 +101,16 @@ def gate(
     echo=print,
 ) -> dict:
     """Numbered choice, own-text -> consequences -> re-ask loop, explicit final
-    confirmation, autonomy matrix, audit. Returns a decision dict."""
+    confirmation, autonomy matrix, audit. Returns a decision dict.
+    A bounded number of rounds: a stdin that keeps answering junk (scripted
+    pipe, not a present operator) quits instead of spinning forever."""
     last_error = ""
+    rounds = 0
     while True:
+        rounds += 1
+        if rounds > 6:
+            audit({"mode": mode, "decision": "quit", "reason": "too many rounds"}, audit_path)
+            return {"status": "quit", "reason": "too many invalid rounds; treating operator as absent"}
         if last_error:
             echo(last_error)
         echo(render(variants))

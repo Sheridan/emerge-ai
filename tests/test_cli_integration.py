@@ -879,3 +879,273 @@ def test_merge_failure_rest_tier_has_no_offer(emerge_stub, ok_compat, monkeypatc
         rollback_fn=lambda *a, **k: called.append(1),
     )
     assert rc == 1 and called == []  # rest-tier: точки нет — предложения нет
+
+
+# --- wire-agent-apply-loop: repair ladder (H5) ---
+
+REPAIR_STUB = """#!/usr/bin/env python3
+import os, sys
+log = os.environ.get("EMERGE_STUB_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(" ".join(sys.argv[1:])
+                + " |ACCEPT_KEYWORDS=" + os.environ.get("ACCEPT_KEYWORDS", "") + "\\n")
+print("STUB-OUT line1")
+if "--pretend" in sys.argv or "-p" in sys.argv:
+    sys.exit(0)
+marker = os.environ.get("EMERGE_STUB_MARKER")
+if marker and os.path.exists(marker):
+    sys.exit(0)
+err = os.environ.get("EMERGE_STUB_ERR")
+if err:
+    print(err, file=sys.stderr)
+if marker:
+    open(marker, "w").close()
+sys.exit(1)
+"""
+
+
+@pytest.fixture
+def repair_stub(tmp_path, monkeypatch):
+    """pretend всегда успешен; merge падает один раз (первый повтор проходит),
+    и пишет ACCEPT_KEYWORDS из окружения в лог вызовов."""
+    path = tmp_path / "emerge"
+    path.write_text(REPAIR_STUB)
+    path.chmod(path.stat().st_mode | 0o111)
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("EMERGE_STUB_LOG", str(log))
+    marker = tmp_path / "failed-once"
+    monkeypatch.setenv("EMERGE_STUB_MARKER", str(marker))
+
+    def calls() -> list[list[str]]:
+        if not log.exists():
+            return []
+        return [line.split() for line in log.read_text().splitlines()]
+
+    return str(path), calls
+
+
+def _repair_agent(monkeypatch, tmp_path):
+    """Endpoint + скриптованный клиент + правила: _maybe_agent даёт proposal."""
+    (tmp_path / "emerge-ai.json").write_text(
+        '{"endpoint": "http://127.0.0.1:9/v1", "model": "m"}')
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "core.md").write_text("Be terse.")
+    monkeypatch.setenv("EMERGE_AI_PROMPTS_DIR", str(rules))
+    monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
+
+    class ProposalClient:
+        def __init__(self, cfg, show_reasoning=False):
+            pass
+
+        def chat(self, messages, tools=None, temperature=0.2):
+            from emerge_ai.llm import Response
+            return Response(content="PROPOSAL: a plain retry should clear it")
+
+        def render(self, resp, stream=None):
+            if resp.content:
+                print(resp.content, file=stream or sys.stdout)
+
+    scripted = ProposalClient(None)
+    monkeypatch.setattr(cli, "LLMClient", lambda cfg, **kw: scripted)
+
+
+def _run_states(tmp_path) -> list[dict]:
+    return [json.loads(f.read_text())
+            for f in tmp_path.glob("*.json") if f.name != "cfg.json"]
+
+
+def test_repair_matrix_responsibility_applies_retry(repair_stub, ok_compat, monkeypatch,
+                                                    tmp_path, capsys):
+    binary, calls = repair_stub
+    _repair_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging app-misc/foo-1.0")
+    rc = cli.main(
+        ["sys-apps/thing", "--i-understand-the-risks"],
+        emerge_binary=binary, runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+    )
+    out, err = capsys.readouterr()
+    assert rc == 0  # retry починил: прогон завершён успехом
+    assert "applied repair variant [retry]" in err and "autonomy matrix:" in err
+    assert _run_states(tmp_path)[0]["repair"] == [
+        {"attempt": 1, "variant": "retry", "retry_rc": 0}]
+    assert len(calls()) == 3  # pretend + неудачный merge + повтор
+
+
+def test_repair_noninteractive_rest_tier_auto_applies(repair_stub, ok_compat, monkeypatch,
+                                                      tmp_path, capsys):
+    """Сценарий спеки: --noninteractive + rest-tier -> применение без вопроса."""
+    binary, calls = repair_stub
+    _repair_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging app-misc/foo-1.0")
+    monkeypatch.setattr(builtins, "input", lambda p="": pytest.fail("must not ask"))
+    rc = cli.main(
+        ["sys-apps/thing", "--noninteractive"],
+        emerge_binary=binary, runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+    )
+    out, err = capsys.readouterr()
+    assert rc == 0
+    assert "applied repair variant [retry]" in err  # обоснование матрицы печатается всегда
+    assert "--noninteractive: rest-tier" in err
+    assert len(calls()) == 3
+
+
+def test_repair_matrix_no_consent_stays_advisory(emerge_stub, ok_compat, monkeypatch,
+                                                 tmp_path, capsys):
+    """Матрица не даёт AUTO без флага (plan-failed -> tier 1): отказ, код сбоя."""
+    binary, calls = emerge_stub
+    _repair_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_ERR", "!!! Unable to resolve --or slot conflict")
+    rc = cli.main(["sys-apps/thing"], emerge_binary=binary, runs_dir=str(tmp_path))
+    out, err = capsys.readouterr()
+    assert rc == 1  # отказ = прежнее консультационное поведение
+    assert "auto-repair refused" in err
+    assert "PROPOSAL" in err  # предложение осталось в выводе
+    assert _run_states(tmp_path)[0]["repair"] == []
+    assert len(calls()) == 1  # система не тронута: один resolve
+
+
+def test_repair_audit_unwritable_fail_closed(repair_stub, ok_compat, monkeypatch,
+                                             tmp_path, capsys):
+    binary, calls = repair_stub
+    _repair_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging")
+    monkeypatch.setattr(cli.gate_mod, "audit", lambda *a, **k: False)
+    rc = cli.main(
+        ["sys-apps/thing", "--i-understand-the-risks"],
+        emerge_binary=binary, runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+    )
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert "decision audit unwritable — fail-closed" in err
+    assert _run_states(tmp_path)[0]["repair"] == []
+    assert len(calls()) == 2  # без аудита нет ни применения, ни повтора
+
+
+def test_repair_interactive_gate_applies_choice(repair_stub, ok_compat, monkeypatch,
+                                                tmp_path, capsys):
+    binary, calls = repair_stub
+    _repair_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging")
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    rc = cli.main(
+        ["sys-apps/thing", "--i-understand-the-risks"],
+        emerge_binary=binary, runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+        input_fn=lambda prompt="": "1", confirm_fn=lambda prompt="": True,
+    )
+    out, err = capsys.readouterr()
+    assert rc == 0
+    assert "applied repair variant [retry]" in err
+    assert _run_states(tmp_path)[0]["repair"] == [
+        {"attempt": 1, "variant": "retry", "retry_rc": 0}]
+
+
+def test_repair_interactive_refusal_keeps_exit_code(repair_stub, ok_compat, monkeypatch,
+                                                    tmp_path, capsys):
+    binary, calls = repair_stub
+    _repair_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging")
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    rc = cli.main(
+        ["sys-apps/thing", "--i-understand-the-risks"],
+        emerge_binary=binary, runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+        input_fn=lambda prompt="": "q", confirm_fn=lambda prompt="": pytest.fail("no ask"),
+    )
+    out, err = capsys.readouterr()
+    assert rc == 1  # код последнего сбоя emerge
+    assert "consent gate: quit — system untouched" in err
+    assert _run_states(tmp_path)[0]["repair"] == []
+    assert len(calls()) == 2
+
+
+def test_repair_limit_two_cycles_then_report(emerge_stub, ok_compat, monkeypatch,
+                                             tmp_path, capsys):
+    binary, calls = emerge_stub
+    _repair_agent(monkeypatch, tmp_path)
+    _failing_stub_env(monkeypatch)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging")
+    rc = cli.main(
+        ["sys-apps/thing", "--i-understand-the-risks"],
+        emerge_binary=binary, runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+    )
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert "repair limit (2 apply->retry cycles) reached" in err
+    repair = _run_states(tmp_path)[0]["repair"]
+    assert [r["variant"] for r in repair] == ["retry", "retry"]
+    assert all(r["retry_rc"] == 1 for r in repair)
+    assert len(calls()) == 4  # pretend + merge + 2 повтора, третий цикл не начат
+
+
+def test_repair_without_agent_no_gate_offer(emerge_stub, ok_compat, monkeypatch,
+                                            tmp_path, capsys):
+    """Нет endpoint'а — циклы починки не включаются вовсе (advisory floor)."""
+    binary, calls = emerge_stub
+    _failing_stub_env(monkeypatch)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging")
+    monkeypatch.setattr(builtins, "input", lambda p="": pytest.fail("must not ask"))
+    rc = cli.main(["sys-apps/thing", "--noninteractive"],
+                  emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert "consulting agent" not in err and "consent gate" not in err
+
+
+def test_repair_env_retry_variant_passes_environment(repair_stub, ok_compat, monkeypatch,
+                                                     tmp_path, capsys):
+    binary, calls = repair_stub
+    _repair_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("EMERGE_STUB_ERR", "These packages are not keyworded: app-misc/foo-1.0")
+    rc = cli.main(
+        ["sys-apps/thing", "--i-understand-the-risks"],
+        emerge_binary=binary, runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+    )
+    out, err = capsys.readouterr()
+    assert rc == 0
+    assert "applied repair variant [env-accept-keywords]" in err  # most specific AUTO
+    log_lines = [l for l in (c[-1] for c in calls()) if l.startswith("|ACCEPT_KEYWORDS=")]
+    # pretend, merge (без env), merge с env — только повтор несёт ACCEPT_KEYWORDS
+    assert log_lines == ["|ACCEPT_KEYWORDS=", "|ACCEPT_KEYWORDS=", "|ACCEPT_KEYWORDS=~amd64"]
+
+
+def test_apply_action_package_edit_idempotent(tmp_path, capsys):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    run = state.RunState(run_id="r1", argv=[])
+    action = {"type": "package-edit", "kind": "unmask",
+              "lines": ["app-misc/foo"], "reason": "repair"}
+    cli._apply_action(action, run=run, etc_dir=str(etc))
+    cli._apply_action(action, run=run, etc_dir=str(etc))
+    out, err = capsys.readouterr()
+    assert "already present — skipped" in err
+    lines = (etc / "package.unmask").read_text().splitlines()
+    assert sum(1 for ln in lines if ln.split()[:1] == ["app-misc/foo"]) == 1
+
+
+def test_apply_action_unknown_type_fail_closed(tmp_path):
+    run = state.RunState(run_id="r1", argv=[])
+    with pytest.raises(ValueError, match="unknown repair action"):
+        cli._apply_action({"type": "curl-pipe-bash"}, run=run, etc_dir=str(tmp_path))
+
+
+def test_typed_variants_whitelist_by_class():
+    from emerge_ai.agent import typed_variants
+
+    plain = typed_variants({"class": "unknown", "argv": ["=sys-apps/x-1"]}, arch="amd64")
+    assert [v["key"] for v in plain] == ["retry"]
+    masked = typed_variants({"class": "mask", "argv": ["app-misc/foo"]}, arch="amd64")
+    assert [v["key"] for v in masked] == ["retry", "package-unmask"]
+    assert masked[1]["action"]["kind"] == "unmask"
+    kw = typed_variants({"class": "keywords", "argv": []}, arch="amd64")
+    assert [v["key"] for v in kw] == ["retry", "env-accept-keywords"]
+    assert kw[1]["action"]["env"] == {"ACCEPT_KEYWORDS": "~amd64"}

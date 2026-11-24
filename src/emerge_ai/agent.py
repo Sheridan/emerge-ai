@@ -234,6 +234,68 @@ class AgentResult:
     trace: list = field(default_factory=list)
     tool_calls_used: int = 0
     stopped_reason: str = "final"
+    variants: list = field(default_factory=list)  # typed executable candidates
+
+
+ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "i686": "x86"}
+
+
+def typed_variants(incident: dict, *, arch: str | None = None) -> list[dict]:
+    """Executable fix candidates for the consent gate (spec: agent-loop-consent).
+    The model's text stays advisory: actions come from this whitelist, built
+    deterministically from the incident class and argv/cpv — the model never
+    supplies commands. Every action is idempotent (append-if-absent, copy-if-
+    absent) and "retry" mutates nothing."""
+    import platform
+
+    from emerge_ai.ladder import overlay_justified
+
+    klass = incident.get("class", "unknown")
+    atoms = [a for a in incident.get("argv", []) if not a.startswith("-")]
+    cpv = incident.get("cpv")
+    out: list[dict] = [
+        {
+            "key": "retry",
+            "title": "repeat the failed emerge unchanged",
+            "rationale": "transient failure (mirror, lock, partial state) is possible",
+            "action": {"type": "retry"},
+        }
+    ]
+    if arch is None:
+        arch = ARCHES.get(platform.machine(), "")
+    if klass == "keywords" and arch:
+        out.append(
+            {
+                "key": "env-accept-keywords",
+                "title": f"retry once with ACCEPT_KEYWORDS=~{arch}",
+                "rationale": "the candidate is simply not keyworded for this arch",
+                "action": {"type": "env-retry", "env": {"ACCEPT_KEYWORDS": f"~{arch}"}},
+            }
+        )
+    if klass == "mask" and atoms:
+        out.append(
+            {
+                "key": "package-unmask",
+                "title": f"add {', '.join(atoms[:3])} to package.unmask",
+                "rationale": "the resolver refused a masked candidate",
+                "action": {
+                    "type": "package-edit",
+                    "kind": "unmask",
+                    "lines": atoms[:3],
+                    "reason": f"emerge-ai repair after '{klass}' incident",
+                },
+            }
+        )
+    if klass in ("compile", "sandbox") and cpv and overlay_justified(klass, False):
+        out.append(
+            {
+                "key": "overlay-copy-fix",
+                "title": f"copy the {cpv} ebuild into the emerge-ai overlay",
+                "rationale": "a local editable copy to patch without touching the tree",
+                "action": {"type": "overlay-copy", "cpv": cpv},
+            }
+        )
+    return out
 
 
 class IncidentAgent:
@@ -428,6 +490,9 @@ class IncidentAgent:
         except LLMError as exc:
             result.proposal = f"agent stopped: {exc}"
             result.stopped_reason = "budget-or-error"
+            result.variants = typed_variants(incident)
             return result
         result.proposal = resp.content
+        # whitelist variants travel with the advisory text (wire-agent-apply-loop)
+        result.variants = typed_variants(incident)
         return result
