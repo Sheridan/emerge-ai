@@ -111,3 +111,58 @@ def test_replay_world_blocks_end_to_end(e2e_env, capsys):
     )
     hits = journal.find(fingerprint_value=entry["fingerprint"], path=tmp / "journal.jsonl")
     assert len(hits) == 1 and hits[0]["class"] == "blocks" and hits[0]["run_id"] == run.run_id
+
+
+def test_repair_ladder_journals_then_finds_precedent(repair_stub, ok_compat, monkeypatch,
+                                                     tmp_path, capsys):
+    """Связочный цикл (agent-loop-consent): фикс петли пишется в журнал самим
+    CLI, а повтор того же сбоя доносит прецедент до модели (tmp-путь журнала
+    подставляет autouse-фикстура conftest)."""
+    binary, calls = repair_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: Popen is not allowed")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({
+        "endpoint": os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
+        "model": os.environ.get("EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
+        "show_digest": False,
+    }))
+    monkeypatch.setattr(cli.portage_compat, "portage_version", lambda: "3.0.82.2")
+    monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
+
+    prompts = []
+
+    class SpyClient:
+        """Настоящий strata + запись промптов: прецедент обязан дойти до модели."""
+
+        def __init__(self, cfg_, show_reasoning=False):
+            from emerge_ai.llm import LLMClient
+            self._real = LLMClient(cfg_, show_reasoning=show_reasoning)
+
+        def chat(self, messages, tools=None, temperature=0.2):
+            prompts.append(list(messages))
+            return self._real.chat(messages, tools=tools, temperature=temperature)
+
+        def render(self, resp, stream=None):
+            self._real.render(resp, stream=stream)
+
+    monkeypatch.setattr(cli, "LLMClient", lambda cfg_, **kw: SpyClient(cfg_, **kw))
+
+    def run_once():
+        return cli.main(
+            ["sys-apps/thing", "--i-understand-the-risks"], emerge_binary=binary,
+            config_path=str(cfg), runs_dir=str(tmp_path / "runs"),
+            plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+        )
+
+    assert run_once() == 0  # retry устранил sandbox-сбой
+    entries = [json.loads(l) for l in (tmp_path / "journal.jsonl").read_text().splitlines()]
+    assert len(entries) == 1 and entries[0]["success"] is True
+    assert entries[0]["class"] == "sandbox"
+    assert "exited rc=0" in entries[0]["verified_by"]
+
+    monkeypatch.setenv("EMERGE_STUB_MARKER", str(tmp_path / "failed-once-2"))  # ещё один сбой
+    prompts.clear()
+    run_once()
+    users = [m["content"] for msgs in prompts for m in msgs if m.get("role") == "user"]
+    assert any("SUCCESSFUL PRECEDENT" in c and "repeat the failed emerge unchanged" in c
+               for c in users)

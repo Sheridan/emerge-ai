@@ -54,7 +54,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   Ветка спека «Недоступный онлайн-откат» (сохранить снапшот + инструкция,
   rollback.py:141-166) недостижима из CLI по той же причине — общий вход `rollback.rollback()`.
 
-### H4. Журнал прецедентов никто не пишет
+### H4. Журнал прецедентов никто не пишет — закрыто (change `wire-journal-writer`)
 - `journal.record`/`journal.finalize` (`src/emerge_ai/journal.py:41,53`) не вызываются из
   production-кода; читают журнал только `IncidentAgent` для дедупа вопросов
   (`agent.py:400-401` → `journal.find`).

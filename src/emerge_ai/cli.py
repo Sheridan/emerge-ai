@@ -17,7 +17,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
-from emerge_ai import changelog, config_edit, digest, etcupdate
+from emerge_ai import changelog, config_edit, digest, etcupdate, journal
 from emerge_ai import gate as gate_mod, init_check
 from emerge_ai import overlay as overlay_mod
 from emerge_ai.incident import build_incident
@@ -381,6 +381,29 @@ def _incident_flow(
         return None
 
 
+def _journal_verified_fix(run, applied: dict, retry_args: list) -> None:
+    """Exactly one journal entry per fix whose retry emerge exited rc=0
+    (spec: agent-loop-consent). An unwritable journal must not change the
+    run's exit code or output, so any I/O error degrades to a warning."""
+    action = (applied or {}).get("action") or {}
+    actions = [str(action.get("type", "retry"))]
+    actions += [str(x) for x in action.get("lines", [])]
+    if action.get("cpv"):
+        actions.append(f"overlay copy {action['cpv']}")
+    try:
+        journal.finalize(
+            run_id=run.run_id,
+            incident=run.incident or {},
+            solution=str(applied.get("title") or applied.get("key") or "repair"),
+            actions=actions,
+            verified_by=f"retry: emerge {' '.join(retry_args)} exited rc=0",
+            success=True,
+            path=journal.JOURNAL_PATH,
+        )
+    except OSError as exc:
+        print(ui.warn(f"journal write failed: {exc} — run unaffected"), file=sys.stderr)
+
+
 def _stdin_is_tty() -> bool:
     """Interactive means a real terminal on stdin; captured or closed stdin is not."""
     try:
@@ -428,7 +451,9 @@ def _maybe_agent(
             client = LLMClient(cfg, show_reasoning=show_reasoning)
             info = portage_compat.emerge_info()
             agent = IncidentAgent(
-                client, context=collect_context(info, cfg.language)
+                client,
+                context=collect_context(info, cfg.language),
+                journal_path=journal.JOURNAL_PATH,
             )
             proposal = agent.propose(
                 run.incident,
@@ -739,6 +764,9 @@ def main(
             plan_args, emerge_binary=emerge_binary, stdout_stream=plan_stream,
             env=(applied.get("action") or {}).get("env"),
         )
+        run.repair[-1]["retry_rc"] = rc
+        if rc == 0:  # fix verified by the retry -> the one journal entry (D1)
+            _journal_verified_fix(run, applied, plan_args)
 
     plan = None
     try:
@@ -842,6 +870,7 @@ def main(
     merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
     state.transition(run, state.MERGE, runs_dir)
     rc, output = run_emerge_capturing(merge_args, emerge_binary=emerge_binary)
+    applied = None  # last applied repair spec, if the repair loop ever runs
     while rc != 0:  # failure -> agent -> consent gate -> apply -> retry (spec: agent-loop-consent)
         run.incident = build_incident(rc, output, merge_args)
         state.transition(run, state.INCIDENT, runs_dir)
@@ -872,6 +901,8 @@ def main(
                 print(ui.ok(line), file=sys.stderr)
         state.transition(run, state.DONE, runs_dir)
         _post_run_digest(run, output, config_path, runs_dir)
+        if applied is not None:  # merge failure repaired -> the one entry (D1)
+            _journal_verified_fix(run, applied, merge_args)
     else:  # run stays in INCIDENT: advisory report, rollback offer, etc flow
         _offer_rollback(
             mode,

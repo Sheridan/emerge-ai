@@ -17,6 +17,7 @@ def _no_real_recovery(monkeypatch, tmp_path):
     """The plan phase now protects every mutation path; unit tests must never
     reach the real /var/lib. Explicit protect_fn= arguments still win."""
     from emerge_ai import cli as cli_mod
+    from emerge_ai import journal as journal_mod
     from emerge_ai.rollback import Protection
 
     monkeypatch.setattr(
@@ -25,6 +26,8 @@ def _no_real_recovery(monkeypatch, tmp_path):
     )
     # autonomy-gate audit lines must never touch /var/log during tests
     monkeypatch.setattr(cli_mod.gate_mod, "AUDIT_PATH", str(tmp_path / "decisions.log"))
+    # verified-fix journal writes must never touch /var/log either
+    monkeypatch.setattr(journal_mod, "JOURNAL_PATH", str(tmp_path / "journal.jsonl"))
 
 
 def fake_ebuild(tmp_path, cpv="cat/pkg-1.0", desc="orig"):
@@ -87,3 +90,47 @@ def jail_log(tmp_path):
     log = root / "build.log"
     log.write_text("noise\nerror: something\n")
     return str(log)
+
+
+# --- shared repair-ladder stub (wire-agent-apply-loop / wire-journal-writer) ---
+
+REPAIR_STUB = """#!/usr/bin/env python3
+import os, sys
+log = os.environ.get("EMERGE_STUB_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(" ".join(sys.argv[1:])
+                + " |ACCEPT_KEYWORDS=" + os.environ.get("ACCEPT_KEYWORDS", "") + "\\n")
+print("STUB-OUT line1")
+if "--pretend" in sys.argv or "-p" in sys.argv:
+    sys.exit(0)
+marker = os.environ.get("EMERGE_STUB_MARKER")
+if marker and os.path.exists(marker):
+    sys.exit(0)
+err = os.environ.get("EMERGE_STUB_ERR")
+if err:
+    print(err, file=sys.stderr)
+if marker:
+    open(marker, "w").close()
+sys.exit(1)
+"""
+
+
+@pytest.fixture
+def repair_stub(tmp_path, monkeypatch):
+    """pretend всегда успешен; merge падает один раз (первый повтор проходит),
+    и пишет ACCEPT_KEYWORDS из окружения в лог вызовов."""
+    path = tmp_path / "emerge"
+    path.write_text(REPAIR_STUB)
+    path.chmod(path.stat().st_mode | 0o111)
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("EMERGE_STUB_LOG", str(log))
+    marker = tmp_path / "failed-once"
+    monkeypatch.setenv("EMERGE_STUB_MARKER", str(marker))
+
+    def calls() -> list[list[str]]:
+        if not log.exists():
+            return []
+        return [line.split() for line in log.read_text().splitlines()]
+
+    return str(path), calls
