@@ -45,8 +45,11 @@ def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) ->
     return proc.returncode, "".join(lines)
 
 
-def confirm(prompt: str = "Proceed? [y/N] ", stream=sys.stdin) -> bool:
-    """Final consent gate owned by emerge-ai; EOF counts as 'no'."""
+def confirm(prompt: str = "Proceed? [y/N] ") -> bool:
+    """Final consent gate owned by emerge-ai; EOF counts as 'no'.
+
+    Reads sys.stdin via input(); the test seam is patching builtins.input.
+    """
     try:
         answer = input(prompt)
     except EOFError:

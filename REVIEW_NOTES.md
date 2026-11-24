@@ -188,7 +188,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
 ### L1. Опечатка в LIVE_CHECKS.md — закрыто (change `fix-live-checks-typo`)
 - `## 14.2`: «`emerge-ai emerge-ai -av`» — двойное слово.
 
-### L2. `confirm(prompt, stream=sys.stdin)` — `stream` игнорируется
+### L2. `confirm(prompt, stream=sys.stdin)` — `stream` игнорируется — закрыто (change `fix-confirm-stream-param`)
 - `runner.py:53-58`: внутри голый `input()`, `stream` не используется; подпись обещает
   инъектируемость, которой нет (тесты патчат `builtins.input`). Убрать параметр или
   читать из stream.
