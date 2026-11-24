@@ -125,7 +125,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   уйдёт в emerge как неизвестный параметр. Либо добавить в OWN_FLAGS (и связать с
   `mode.responsibility`/гейтом), либо убрать упоминания.
 
-### M6. `confirm_fn` в `_etc_flow` — декоративный параметр
+### M6. `confirm_fn` в `_etc_flow` — декоративный параметр — закрыто (change `fix-etc-confirm-fn`)
 - `cli.py:145` принимает `confirm_fn`, но внутри нигде не использует: человек-гейт идёт
   через `input_fn` (deфолт — встроенный `input`, injectable), а `apply_decision` получает
   `lambda _p: True` (cli.py:196). Вызывающий код (`confirm_fn=confirm` в cli.py:421)

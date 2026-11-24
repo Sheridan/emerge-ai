@@ -142,7 +142,7 @@ def _maybe_agent(
         return None
 
 
-def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_factory=None, show_reasoning=False) -> None:
+def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None, show_reasoning=False) -> None:
     if not run.incident or run.incident.get("class") != "config-protect":
         return
     try:
@@ -193,6 +193,8 @@ def _etc_flow(run, config_path, confirm_fn, *, llm=True, input_fn=input, client_
         except ValueError as exc:
             print(ui.warn(f"bad override ({exc}); keeping current"), file=sys.stderr)
             decision = {"action": "keep-current", "reason": "bad override", "citations": ["user"]}
+        # deliberate: per-file consent already happened above via
+        # input_fn/parse_override; apply_decision requires the keyword gate
         res = etcupdate.apply_decision(newp, decision, confirm_fn=lambda _p: True)
         print(ui.info(f"etc-update applied={res['applied']} action={res['action']}"), file=sys.stderr)
 
@@ -317,7 +319,7 @@ def main(
             run.agent_proposal = _maybe_agent(
                 run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
             )
-            _etc_flow(run, config_path, confirm_fn=lambda _p: False, llm=False)
+            _etc_flow(run, config_path, llm=False)
         else:
             _post_run_digest(run, output, config_path, runs_dir)
         state.save_run(run, runs_dir)
@@ -416,7 +418,7 @@ def main(
             run.agent_proposal = _maybe_agent(
                 run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
             )
-            _etc_flow(run, config_path, confirm_fn=confirm, show_reasoning=verbose)
+            _etc_flow(run, config_path, show_reasoning=verbose)
         else:
             _post_run_digest(run, output, config_path, runs_dir)
         state.save_run(run, runs_dir)
