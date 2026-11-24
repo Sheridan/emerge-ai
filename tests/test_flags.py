@@ -60,9 +60,41 @@ def test_repeated_own_flag_is_idempotent():
 
 
 def test_help_lists_every_own_flag():
-    help_lines = {ln.strip().split()[0] for ln in OWN_FLAG_HELP.splitlines() if ln.strip()}
+    # every recognised flag (canonical or alias) must be documented verbatim
+    tokens = {tok.strip("()") for ln in OWN_FLAG_HELP.splitlines() for tok in ln.split()}
     for flag in OWN_FLAGS:
-        assert flag in help_lines, f"{flag} missing from OWN_FLAG_HELP"
+        assert flag in tokens, f"{flag} missing from OWN_FLAG_HELP"
+
+
+def test_risk_alias_sets_responsibility():
+    mode, rest = parse_own_flags(["--i-understand-the-risks", "-u", "@world"])
+    assert mode == Mode(responsibility=True)
+    assert rest == ["-u", "@world"]  # the alias never reaches emerge
+
+
+def test_long_flag_and_alias_pair_is_idempotent():
+    pair = ["--i-understand-the-risks", RESPONSIBILITY, "x"]
+    mode, rest = parse_own_flags(list(pair))
+    assert mode == Mode(responsibility=True)
+    assert rest == ["x"]
+
+
+def test_near_prefix_alias_is_not_mine():
+    # exact matching only: lookalikes belong to emerge (it will reject them itself)
+    mode, rest = parse_own_flags(["--i-understand-the-risksX", "y"])
+    assert mode == Mode()
+    assert rest == ["--i-understand-the-risksX", "y"]
+
+
+def test_every_flag_mentioned_in_text_is_recognised():
+    """Подсказки не должны водить пользователя в тупик: оба имени реальны."""
+    import inspect
+    import re
+
+    from emerge_ai import gate
+
+    for flag in set(re.findall(r"--i-understand[\w-]*", inspect.getsource(gate))):
+        assert flag in OWN_FLAGS, f"gate.py hints at unknown flag {flag}"
 
 
 def test_own_flags_table_matches_mode_fields():

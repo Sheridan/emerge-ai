@@ -50,7 +50,8 @@ def autonomy_decision(mode: dict, variant: Variant) -> tuple[str, str]:
     cases; responsibility mode is the only fully autonomous one)."""
     if mode.get("responsibility"):
         return AUTO, (
-            "--i-understand-the-risks: autonomous apply at all tiers "
+            "--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences:"
+            f" autonomous apply at all tiers "
             f"(queue tiers {variant.tiers or (5,)}, kind={variant.kind}); "
             "recovery point verification still required before mutations"
         )
@@ -58,14 +59,16 @@ def autonomy_decision(mode: dict, variant: Variant) -> tuple[str, str]:
         # rollbacks always need an explicit human unless responsibility
         return DENY if mode.get("noninteractive") else ASK, (
             "rollback requires explicit human confirmation "
-            "(--i-understand-the-risks to automate)"
+            "(--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences"
+            " to automate)"
         )
     if mode.get("noninteractive"):
         if variant.tiers and max(variant.tiers) == 5 and variant.kind == "fix":
             return AUTO, "--noninteractive: rest-tier auto-repair allowed"
         return DENY, (
             f"--noninteractive: refusing auto-{variant.kind} at tiers {variant.tiers}; "
-            "run interactively or pass --i-understand-the-risks"
+            "run interactively or pass "
+            "--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences"
         )
     return ASK, "default mode: every mutation requires a human yes"
 

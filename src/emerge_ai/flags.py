@@ -17,6 +17,7 @@ class _OwnFlagDef:
     flag: str
     mode_field: str
     description: str
+    alias: str | None = None
 
 
 _OWN_FLAG_DEFS = (
@@ -29,6 +30,7 @@ _OWN_FLAG_DEFS = (
         "--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences",
         "responsibility",
         "full autonomy including rollback execution",
+        alias="--i-understand-the-risks",
     ),
     _OwnFlagDef(
         "--changelog",
@@ -38,17 +40,23 @@ _OWN_FLAG_DEFS = (
 )
 
 # Single source of truth: own flag -> name of the Mode field it sets.
-OWN_FLAGS: dict[str, str] = {d.flag: d.mode_field for d in _OWN_FLAG_DEFS}
+# Aliases set the same field as their canonical flag.
+OWN_FLAGS: dict[str, str] = {}
+for _d in _OWN_FLAG_DEFS:
+    OWN_FLAGS[_d.flag] = _d.mode_field
+    if _d.alias:
+        OWN_FLAGS[_d.alias] = _d.mode_field
 
 
 def _build_own_flag_help() -> str:
     desc_col = 22
     lines = ["emerge-ai own flags (everything else is passed to emerge verbatim):"]
     for d in _OWN_FLAG_DEFS:
-        if len(d.flag) + 2 <= desc_col - 2:
-            lines.append(f"  {d.flag:<{desc_col - 2}}{d.description}")
+        shown = d.flag + (f" (or {d.alias})" if d.alias else "")
+        if len(shown) + 2 <= desc_col - 2:
+            lines.append(f"  {shown:<{desc_col - 2}}{d.description}")
         else:
-            lines.append(f"  {d.flag}")
+            lines.append(f"  {shown}")
             lines.append(f"  {'':<{desc_col - 2}}{d.description}")
     lines.append("")
     return "\n".join(lines)

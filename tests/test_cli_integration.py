@@ -762,3 +762,17 @@ def test_resume_rerun_plan_failure_keeps_incident_state(emerge_stub, ok_compat, 
     after = json.loads((tmp_path / f"{run.run_id}.json").read_text())
     assert after["state"] == "INCIDENT"
     assert after["incident"]["class"] == "plan-failed"
+
+
+def test_alias_risk_flag_full_auto_merge(emerge_stub, ok_compat, tmp_path):
+    """e2e: --noninteractive --i-understand-the-risks -a автономен; emerge флага не видел."""
+    binary, calls = emerge_stub
+    rc = cli.main(
+        ["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 1, "hint")]),
+    )
+    assert rc == 0
+    assert calls() == [["app-misc/foo", "--pretend"], ["app-misc/foo"]]
+    assert all("--i-understand" not in arg for call in calls() for arg in call)

@@ -75,7 +75,14 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
 | Флаг | Действие |
 | --- | --- |
 | `--noninteractive` | без вопросов в TTY; автономные действия — только rest-tier, остальное fail-closed (лог + ненулевой выход) |
-| `--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences` | полная автономия, включая исполнение отката |
+| `--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences` | полная автономия, включая исполнение отката; короткий псевдоним — `--i-understand-the-risks` (тот же режим, идемпотентно с длинной формой) |
+| `--changelog` | дайджест новостей/GLESA/GitHub/git вместо сборки |
+
+Полностью автоматный прогон (CI, ночной world):
+
+```bash
+emerge-ai --noninteractive --i-understand-the-risks -uDN @world
+```
 
 `-v`/`--verbose` (флаг emerge, передаётся ему без изменений) дополнительно
 включает вывод рассуждений модели (`[reasoning] ...` в stderr); по умолчанию

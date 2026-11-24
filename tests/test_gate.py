@@ -100,7 +100,7 @@ def test_responsibility_autonomous_everything_including_rollback(tmp_path):
                input_fn=scripted("3"), audit_path=tmp_path / "a.log",
                echo=justifications.append)
     assert res["status"] == "applied" and actions == ["rollback"]
-    assert any("--i-understand-the-risks" in j for j in justifications)
+    assert any("--i-understand-what-i-am-doing" in j for j in justifications)
 
 
 def test_unaffirmed_variants_have_no_system_effect():
@@ -108,3 +108,18 @@ def test_unaffirmed_variants_have_no_system_effect():
     assert autonomy_decision({}, v)[0] == "ask"
     assert autonomy_decision({"noninteractive": True}, v)[0] == "deny"
     assert autonomy_decision({"responsibility": True}, v)[0] == "auto"
+
+
+def test_risk_alias_mode_equals_long_flag():
+    """wire-risk-flag: псевдоним — ровно тот же вход матрицы, что длинный флаг."""
+    import dataclasses
+
+    from emerge_ai.flags import parse_own_flags
+
+    long_mode = dataclasses.asdict(
+        parse_own_flags(["--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences"])[0]
+    )
+    alias_mode = dataclasses.asdict(parse_own_flags(["--i-understand-the-risks"])[0])
+    v = Variant("fix", "f", tiers=(1,), action=lambda: None)
+    assert autonomy_decision(alias_mode, v) == autonomy_decision(long_mode, v)
+    assert autonomy_decision(alias_mode, v)[0] == "auto"
