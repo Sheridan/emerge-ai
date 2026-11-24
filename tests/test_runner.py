@@ -1,6 +1,8 @@
 import io
 import stat
 
+import pytest
+
 from emerge_ai.digest import parse_installed
 from emerge_ai.runner import run_emerge_capturing, with_color_flag
 
@@ -105,3 +107,69 @@ def test_run_emerge_capturing_valid_utf8_untouched(tmp_path, capsys):
     assert capsys.readouterr().out == line  # byte-identical, no replacements
     assert buf == line
     assert "\ufffd" not in buf
+
+
+SPLIT_STUB = """#!/usr/bin/env python3
+import sys
+sys.stdout.write("\\x1b[32mOUT-ONE\\x1b[0m\\n")
+sys.stderr.write("\\x1b[33mERR-ONE\\x1b[0m\\n")
+sys.stdout.write("OUT-TWO\\n")
+sys.stderr.write("ERR-TWO\\n")
+sys.exit(3)
+"""
+
+
+def _split_stub(tmp_path):
+    path = tmp_path / "emerge"
+    path.write_text(SPLIT_STUB)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    return path
+
+
+def test_streams_routed_to_matching_streams(tmp_path, capfd):
+    rc, buf = run_emerge_capturing(["-p", "app-misc/split"], emerge_binary=str(_split_stub(tmp_path)))
+    assert rc == 3
+    captured = capfd.readouterr()
+    # our stdout carries ONLY emerge's stdout, byte-for-byte with ANSI (D: spec)
+    assert captured.out == "\x1b[32mOUT-ONE\x1b[0m\nOUT-TWO\n"
+    assert captured.err == "\x1b[33mERR-ONE\x1b[0m\nERR-TWO\n"
+    # merged ANSI-stripped buffer feeds incident/enrich
+    assert "OUT-ONE" in buf and "OUT-TWO" in buf and "ERR-ONE" in buf and "ERR-TWO" in buf
+    assert "\x1b" not in buf
+
+
+def test_large_output_both_streams_no_deadlock(tmp_path, capfd):
+    stub = tmp_path / "emerge"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "chunk = b'x' * 4096 + b'\\n'\n"
+        "for _ in range(200):  # ~800 KB per stream, far above the 64K pipe buffer\n"
+        "    sys.stdout.buffer.write(chunk)\n"
+        "    sys.stderr.buffer.write(chunk)\n"
+        "    sys.stdout.buffer.flush(); sys.stderr.buffer.flush()\n"
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    rc, buf = run_emerge_capturing(["-p", "app-misc/big"], emerge_binary=str(stub))
+    assert rc == 0  # reached wait(): no deadlock with both pipes saturated
+    captured = capfd.readouterr()
+    assert captured.out.count("x" * 4096) == 200
+    assert captured.err.count("x" * 4096) == 200
+    assert buf.count("x" * 4096) == 400  # nothing dropped from the buffer
+
+
+def test_reader_thread_error_propagates(tmp_path, capfd, monkeypatch):
+    from emerge_ai import ui as runner_ui
+
+    calls = []
+    real = runner_ui.strip_ansi
+
+    def flaky(line):
+        calls.append(line)
+        if len(calls) == 2:
+            raise RuntimeError("reader boom")
+        return real(line)
+
+    monkeypatch.setattr(runner_ui, "strip_ansi", flaky)
+    with pytest.raises(RuntimeError, match="reader boom"):
+        run_emerge_capturing(["-p", "app-misc/split"], emerge_binary=str(_split_stub(tmp_path)))

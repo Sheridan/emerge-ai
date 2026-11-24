@@ -98,7 +98,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   либо реализовать (извлечь категорию/пакет из `new_path` → `https://packages.gentoo.org/packages/<cat>/<p>`
   + поиск вики), либо отключить и честно сказать «не реализовано».
 
-### M2. stderr emerge сливается в stdout на всех путях
+### M2. stderr emerge сливается в stdout на всех путях — закрыто (change `split-emerge-stderr`)
 - `runner.run_emerge_capturing` (`runner.py:40`) ставит `stderr=STDOUT`; mirror идёт в
   `sys.stdout`. Значит и на raw-passthrough пути (без `-p/-a`) stderr emerge попадает в
   stdout emerge-ai: ломаются `emerge-ai ... 2>/dev/null`, разделение в пайплайнах,

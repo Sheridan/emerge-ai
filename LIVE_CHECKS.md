@@ -33,6 +33,9 @@ sudo emerge-ai -a sys-apps/baselayout
 - (факультативно, lenient-emerge-decoding) `LC_ALL=C` и пакет/файл с не-UTF-8 именем в выводе
   emerge: emerge-ai НЕ падает с UnicodeDecodeError — недекодируемые байты печатаются как
   `�` (символ замены) и прогон доходит до штатного rc.
+- (split-emerge-stderr) `emerge-ai -av 2>/dev/null` — в stdout нет строк, которые portage писал
+  в stderr (например, предупреждений масок); `emerge-ai -av 1>/dev/null` — те же сообщения
+  видны в stderr без изменений (до фикса весь stderr emerge лился в stdout).
 
 ## Интерактивные вопросы оператора (interactive-incident-dialogue, выполняет пользователь)
 

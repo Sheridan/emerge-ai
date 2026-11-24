@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 
 from emerge_ai import ui
 
@@ -25,29 +26,49 @@ def with_color_flag(emerge_args: list[str], stream=None) -> list[str]:
 
 
 def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) -> tuple[int, str]:
-    """Run emerge (typically --pretend), mirroring output to stdout while
-    buffering it for the enrichment hook. No TTY is attached. stdout stays
-    byte-identical passthrough for fully decodable output (spec:
-    console-output); the buffer is ANSI-stripped because it feeds parsing and
+    """Run emerge (typically --pretend), mirroring output while buffering it
+    for incident parsing and enrichment. No TTY is attached. emerge's stdout
+    mirrors to our stdout and its stderr to our stderr, byte-for-byte
+    (spec: console-output); the returned buffer holds both sides ANSI-stripped,
+    in read order (not cross-stream normalized), because it feeds parsing and
     the LLM (design D5). Undecodable bytes are replaced, never fatal, and the
     text never carries surrogates (spec: console-output, replace-not-crash)."""
     proc = subprocess.Popen(
         [emerge_binary, *with_color_flag(emerge_args)],
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,
     )
     # Decode per line against the console encoding with "replace": one stray
     # byte must not abort the run before proc.wait() and the incident report.
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    lines: list[str] = []
-    assert proc.stdout is not None
-    for raw in proc.stdout:  # binary mode: bytes lines, we decode explicitly
-        line = raw.decode(encoding, errors="replace")
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        lines.append(ui.strip_ansi(line))
+    buffer: list[str] = []
+    lock = threading.Lock()
+    failures: list[BaseException] = []
+
+    def pump(stream, mirror) -> None:
+        try:
+            for raw in stream:  # binary mode: bytes lines, we decode explicitly
+                line = raw.decode(encoding, errors="replace")
+                mirror.write(line)
+                mirror.flush()
+                with lock:
+                    buffer.append(ui.strip_ansi(line))
+        except Exception as exc:  # re-raised after wait(); never swallowed
+            with lock:
+                failures.append(exc)
+
+    readers = [
+        threading.Thread(target=pump, args=(proc.stdout, sys.stdout), daemon=True),
+        threading.Thread(target=pump, args=(proc.stderr, sys.stderr), daemon=True),
+    ]
+    for t in readers:
+        t.start()
     proc.wait()
-    return proc.returncode, "".join(lines)
+    for t in readers:
+        t.join()
+    if failures:
+        raise failures[0]
+    return proc.returncode, "".join(buffer)
 
 
 def confirm(prompt: str = "Proceed? [y/N] ") -> bool:
