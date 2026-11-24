@@ -4,7 +4,14 @@ import os
 import pytest
 
 from emerge_ai.config import Config
-from emerge_ai.llm import LLMClient, LLMError, Response, run_tool_loop
+from emerge_ai.llm import (
+    LimitExhausted,
+    LLMClient,
+    LLMError,
+    Response,
+    ToolCall,
+    run_tool_loop,
+)
 
 ENDPOINT = os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1")
 MODEL = os.environ.get(
@@ -81,6 +88,89 @@ def test_render_custom_and_off_palette_never_escape_on_pipe():
 def test_no_endpoint_raises():
     with pytest.raises(LLMError):
         LLMClient(Config())
+
+
+# --- LimitExhausted: distinguishable limit signal (handle-agent-limit-exhaustion / M13) ---
+
+
+class ScriptedLoopClient:
+    """Minimal fake client for run_tool_loop: replays canned responses."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def chat(self, messages, tools=None, temperature=0.2):
+        self.calls += 1
+        return self.responses.pop(0)
+
+    def render(self, resp, stream=None):
+        pass
+
+
+def test_limit_exhausted_is_a_distinguishable_llm_error():
+    assert issubclass(LimitExhausted, LLMError)
+    exc = LimitExhausted("tokens", partial=Response(content="half"), messages=[])
+    assert exc.reason == "tokens"
+    assert exc.partial.content == "half"
+    assert "tokens" in str(exc)
+
+
+def test_truncated_answer_raises_limit_exhausted_not_final_answer():
+    # spec «Ответ обрезан на лимите»: never published as a finished proposal
+    client = ScriptedLoopClient([Response(content="half an idea", finish_reason="length")])
+    msgs = [{"role": "user", "content": "analyze"}]
+    with pytest.raises(LimitExhausted) as ei:
+        run_tool_loop(client, msgs, [], lambda name, args: {})
+    assert ei.value.reason == "tokens"
+    assert ei.value.partial.content == "half an idea"
+    # the message history travels with the signal — resumption starts from it
+    assert ei.value.messages[0]["content"] == "analyze"
+
+
+def test_truncated_tool_calls_are_never_executed():
+    # a generation cut at the limit can carry half-written arguments (design risk D3)
+    executed = []
+
+    def dispatch(name, args):
+        executed.append(name)
+        return {}
+
+    client = ScriptedLoopClient([
+        Response(content="", finish_reason="length",
+                 tool_calls=[ToolCall(id="c1", name="run_command", arguments={"cmd": "rm"})])
+    ])
+    with pytest.raises(LimitExhausted) as ei:
+        run_tool_loop(client, [{"role": "user", "content": "go"}], [], dispatch)
+    assert ei.value.reason == "tokens"
+    assert executed == []
+
+
+def test_round_budget_raises_limit_exhausted_with_history():
+    class AlwaysTool:
+        def __init__(self):
+            self.n = 0
+
+        def chat(self, messages, tools=None, temperature=0.2):
+            self.n += 1
+            return Response(content="", tool_calls=[
+                ToolCall(id=f"c{self.n}", name="t", arguments={})])
+
+        def render(self, resp, stream=None):
+            pass
+
+    seen = []
+
+    def dispatch(name, args):
+        seen.append(name)
+        return {"ok": True}
+
+    with pytest.raises(LimitExhausted) as ei:
+        run_tool_loop(AlwaysTool(), [{"role": "user", "content": "go"}], [], dispatch,
+                      max_rounds=3)
+    assert ei.value.reason == "rounds"
+    assert seen == ["t", "t", "t"]
+    assert any(m["role"] == "tool" for m in ei.value.messages)
 
 
 # ---------------- live strata replay (design D13: all LLM tests hit strata) ----

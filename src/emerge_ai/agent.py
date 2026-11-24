@@ -8,7 +8,8 @@ import sys
 from dataclasses import dataclass, field
 
 from emerge_ai import injection, journal, ui
-from emerge_ai.llm import LLMError, run_tool_loop
+from emerge_ai import gate as gate_mod
+from emerge_ai.llm import LLMError, LimitExhausted, run_tool_loop
 from emerge_ai.prompts import (
     PLAIN_TEXT_DIRECTIVE,
     assemble_system_prompt,
@@ -21,6 +22,28 @@ MAX_TOOL_CALLS = 14
 MAX_TOOL_RESULT_CHARS = 4000
 MAX_ASK_QUESTIONS = 3  # questions shown to the operator per incident (spec: agent-loop-consent)
 ASK_MAX_OPTIONS = 6
+
+# Limit-exhaustion dialogue (spec: Исчерпание лимита токенов, design D2/D3):
+# three options on the standard mode channel, the question asked once per run.
+LIMIT_OPTIONS = [
+    {"key": "continue",
+     "label": "continue the analysis",
+     "consequences": "same state, a larger tool-round budget; offered once per incident"},
+    {"key": "narrow",
+     "label": "narrow the analysis",
+     "consequences": "shorter log windows and smaller tool-result caps"},
+    {"key": "finish",
+     "label": "finish the analysis",
+     "consequences": "wrap up with the evidence gathered so far"},
+]
+LIMIT_TRUNCATED_NOTE = ("\n\n[answer truncated at the token limit — unfinished "
+                        "fragment, not a final conclusion]")
+
+
+def limit_reason(reason: str) -> str:
+    """Human-readable detail for the LimitExhausted reason."""
+    return ("the endpoint truncated the answer at the token/context limit"
+            if reason == "tokens" else "the tool-round budget ran out")
 
 CLASS_SKELETONS: dict[str, str] = {
     "compile": (
@@ -310,6 +333,7 @@ class IncidentAgent:
         max_tool_calls: int = MAX_TOOL_CALLS,
         journal_path: str | None = journal.JOURNAL_PATH,
         ask_channel=None,
+        audit_path: str | None = None,
     ):
         self.client = client
         self.journal_path = journal_path
@@ -323,6 +347,10 @@ class IncidentAgent:
         self.max_tool_calls = max_tool_calls
         # Injectable question channel (design D3): callable(question, options) -> dict.
         self.ask_channel = ask_channel or self._ask_stdin
+        # Limit-exhaustion seams: audit file (None -> gate.AUDIT_PATH at call
+        # time, test-injectable) and the «narrow» flag from the operator.
+        self.audit_path = audit_path
+        self._narrow = False
 
     def _ask_palette(self) -> dict:
         """Palette of the configured client, when it carries a config (llm_colors)."""
@@ -417,8 +445,11 @@ class IncidentAgent:
             result.trace.append((name, args))
             try:
                 if name == "read_file_window":
+                    limit = int(args.get("limit", 200))
+                    if self._narrow:
+                        limit = min(limit, 50)  # «свернуть разбор»: shorter windows (D3)
                     out = self.sandbox.read_file_window(
-                        args.get("path", ""), int(args.get("offset", 0)), int(args.get("limit", 200))
+                        args.get("path", ""), int(args.get("offset", 0)), limit
                     )
                 elif name == "grep_log":
                     out = self.sandbox.grep_log(args.get("path", ""), args.get("pattern", ""))
@@ -439,7 +470,8 @@ class IncidentAgent:
             text = json.dumps(out, ensure_ascii=False)
             if name == "read_file_window" or name == "grep_log" or name == "web_fetch":
                 text = injection.wrap_untrusted(text, source=name)
-            return {"content": text[:MAX_TOOL_RESULT_CHARS]}
+            cap = MAX_TOOL_RESULT_CHARS // 4 if self._narrow else MAX_TOOL_RESULT_CHARS
+            return {"content": text[:cap]}
 
         return call
 
@@ -481,18 +513,125 @@ class IncidentAgent:
         ]
         result = AgentResult(proposal="")
         loop_client = _TurnCountingClient(self.client)
-        try:
-            resp = run_tool_loop(
-                loop_client, messages, tool_specs(interactive),
-                self._dispatch(result, interactive=interactive, turns=loop_client.turns),
-                max_rounds=self.max_rounds, render_to=render_to,
-            )
-        except LLMError as exc:
-            result.proposal = f"agent stopped: {exc}"
-            result.stopped_reason = "budget-or-error"
-            result.variants = typed_variants(incident)
-            return result
+        dispatch = self._dispatch(result, interactive=interactive, turns=loop_client.turns)
+        rounds = self.max_rounds
+        limit_asked = False
+        while True:
+            try:
+                resp = run_tool_loop(
+                    loop_client, messages, tool_specs(interactive), dispatch,
+                    max_rounds=rounds, render_to=render_to,
+                )
+                break
+            except LimitExhausted as exc:
+                # a limit hit is a dialogue subject (spec: Исчерпание лимита),
+                # not a broken agent: verdict per mode channel (D2/D4)
+                messages, rounds, go_on = self._limit_verdict(
+                    exc, incident, interactive, limit_asked, rounds)
+                limit_asked = True
+                if not go_on:
+                    self._finish_at_limit(result, exc, incident)
+                    return result
+            except LLMError as exc:
+                result.proposal = f"agent stopped: {exc}"
+                result.stopped_reason = "budget-or-error"
+                result.variants = typed_variants(incident)
+                return result
         result.proposal = resp.content
         # whitelist variants travel with the advisory text (wire-agent-apply-loop)
         result.variants = typed_variants(incident)
         return result
+
+    def _limit_verdict(self, exc: LimitExhausted, incident: dict, interactive: bool,
+                       asked: bool, rounds: int):
+        """One verdict per limit hit (D2/D4): continue the loop with new
+        messages and a new round cap, or end the analysis. Non-interactive
+        never asks (base consent spec) — it audits and finishes; a second hit
+        in the same incident is never offered a continuation again."""
+        if not interactive:
+            self._audit_limit(exc, incident)
+            return exc.messages, rounds, False
+        if asked:  # spec: «Повторное исчерпание» — итог, без нового вопроса
+            return exc.messages, rounds, False
+        answer = dict(self.ask_channel(
+            f"Agent limit exhausted: {limit_reason(exc.reason)}. How should the analysis "
+            "continue?", LIMIT_OPTIONS) or {})
+        key = self._limit_choice(answer)
+        if key == "continue":
+            # D3: same analysis state from the interruption point, a bigger
+            # round budget — never a restart from scratch, at most once
+            return self._resume_messages(exc), rounds + max(1, self.max_rounds), True
+        if key == "narrow":
+            self._narrow = True  # shorter windows and result caps in _dispatch
+            return exc.messages, rounds, True
+        return exc.messages, rounds, False
+
+    @staticmethod
+    def _limit_choice(answer: dict) -> str:
+        """Map a channel answer onto an option key. No answer, EOF or free
+        text all mean «finish»: spending more token budget needs an explicit
+        operator choice."""
+        if answer.get("status") != "answered":
+            return "finish"
+        key = str(answer.get("key", "")).lower()
+        if key in ("continue", "narrow", "finish"):
+            return key
+        text = str(answer.get("choice", "")).lower()
+        for option in LIMIT_OPTIONS:
+            if option["label"].lower() in text:
+                return option["key"]
+        return "finish"
+
+    @staticmethod
+    def _resume_messages(exc: LimitExhausted) -> list:
+        """Continue from the exact interruption point (task 2.2): the message
+        history as the loop left it, with the truncated fragment handed back
+        to the model explicitly marked as unfinished (design risk D3)."""
+        msgs = list(exc.messages)
+        frag = (exc.partial.content or "").strip() if exc.partial else ""
+        if frag:
+            msgs.append({"role": "assistant", "content": frag})
+            msgs.append({"role": "user", "content":
+                "Your previous answer was cut off by the token limit and is unfinished. "
+                "Continue the analysis from where it stopped; do not repeat what is "
+                "already written."})
+        return msgs
+
+    def _finish_at_limit(self, result: AgentResult, exc: LimitExhausted, incident: dict) -> None:
+        """End the analysis with what was gathered (D3 «завершить»): a
+        truncated fragment is published marked as non-final (task 1.2), and
+        the deterministic whitelist variants still travel with the result."""
+        frag = (exc.partial.content or "").strip() if exc.partial else ""
+        result.stopped_reason = "limit-exhausted"
+        if frag:
+            result.proposal = frag + LIMIT_TRUNCATED_NOTE
+        else:
+            result.proposal = (f"(analysis stopped: the {exc.reason} limit was exhausted after "
+                               f"{result.tool_calls_used} tool calls — no final answer was "
+                               "produced from the evidence gathered so far)")
+        result.variants = typed_variants(incident)
+
+    def _audit_limit(self, exc: LimitExhausted, incident: dict) -> None:
+        """Non-interactive notification (D4): an audit line in the same
+        decisions.log the gate writes, plus a verbose stderr line. The
+        original emerge exit code is untouched either way."""
+        written = gate_mod.audit(
+            {
+                "mode": "noninteractive",
+                "variant": "agent-analysis",
+                "kind": "agent-limit",
+                "decision": "finish",
+                "reason": f"agent limit exhausted ({exc.reason}): "
+                          f"{limit_reason(exc.reason)}; no question asked in a "
+                          "non-interactive run, analysis finished with what was gathered",
+                "incident_class": incident.get("class"),
+                "run_id": incident.get("run_id"),
+            },
+            self.audit_path or gate_mod.AUDIT_PATH,
+        )
+        print(ui.err(f"agent limit exhausted ({exc.reason}): {limit_reason(exc.reason)}; the "
+                     "question is not asked in a non-interactive run, the analysis finished "
+                     "with what was gathered (recorded in the decision journal)"),
+              file=sys.stderr)
+        if not written:
+            print(ui.warn("decision audit could not be written"), file=sys.stderr)

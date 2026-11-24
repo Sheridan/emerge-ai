@@ -340,7 +340,7 @@ def test_default_channel_eof_then_closed_channel_stays_quiet(jail, monkeypatch, 
     assert any('"closed"' in r for r in client.seen_tool_results)
 
 
-def test_agent_tool_budget(jail):
+def test_agent_tool_budget(jail, tmp_path):
     sb, log = jail
 
     class AlwaysTool:
@@ -353,10 +353,178 @@ def test_agent_tool_budget(jail):
                 ToolCall(id=f"c{self.n}", name="grep_log", arguments={"path": log, "pattern": "e"})
             ])
 
-    agent = IncidentAgent(AlwaysTool(), sb, rules="R", max_rounds=4, max_tool_calls=3)
+    agent = IncidentAgent(AlwaysTool(), sb, rules="R", max_rounds=4, max_tool_calls=3,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log))
+    # round exhaustion is a distinguishable limit now (M13), not a plain error
+    assert result.stopped_reason == "limit-exhausted"
+    assert "rounds limit" in result.proposal or "limit" in result.proposal
+    assert result.variants  # deterministic whitelist variants still attached
+    assert result.tool_calls_used <= 4
+
+
+# --- handle-agent-limit-exhaustion (M13): the limit is a dialogue subject ---
+
+TRUNCATED = Response(content="so far the log points to a missing header",
+                     finish_reason="length")
+CONTINUE_ANSWER = {"status": "answered",
+                   "choice": "continue the analysis — same state, a larger budget"}
+
+
+def test_limit_tokens_interactive_asks_once_and_resumes(jail, tmp_path):
+    sb, log = jail
+    client = ScriptedClient([TRUNCATED, Response(content="FINAL PROPOSAL: add the header")])
+    ask = scripted_channel(CONTINUE_ANSWER)
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=ask,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log), interactive=True)
+    assert len(ask.calls) == 1
+    question, options = ask.calls[0]
+    assert "limit" in question.lower()
+    assert [o["key"] for o in options] == ["continue", "narrow", "finish"]
+    # «продолжить» resumes from the interruption point, not from scratch (D3):
+    # the truncated fragment is handed back to the model marked as unfinished
+    resumed = client.messages
+    assert any(m["role"] == "assistant" and "missing header" in (m.get("content") or "")
+               for m in resumed)
+    assert any("cut off" in (m.get("content") or "") for m in resumed if m["role"] == "user")
+    assert result.proposal == "FINAL PROPOSAL: add the header"
+    assert result.stopped_reason == "final"
+    assert result.variants
+
+
+def test_limit_rounds_interactive_continue_uses_the_raised_budget(jail, tmp_path):
+    sb, log = jail
+    client = ScriptedClient([
+        {"grep_log": {"path": log, "pattern": "error"}},
+        {"grep_log": {"path": log, "pattern": "wait"}},
+        {"grep_log": {"path": log, "pattern": "undefined"}},
+        {"grep_log": {"path": log, "pattern": "collect2"}},
+    ])  # ScriptedClient answers "PROPOSAL: fix it" once the steps run out
+    ask = scripted_channel(CONTINUE_ANSWER)
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=2, ask_channel=ask,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log), interactive=True)
+    assert len(ask.calls) == 1
+    assert result.proposal == "PROPOSAL: fix it"  # finished within the bigger budget
+    assert result.stopped_reason == "final"
+
+
+def test_limit_second_exhaustion_never_asks_again(jail, tmp_path):
+    # spec «Повторное исчерпание»: one question and one continuation per incident
+    sb, log = jail
+    client = ScriptedClient([TRUNCATED, TRUNCATED])
+    ask = scripted_channel(CONTINUE_ANSWER)
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=2, ask_channel=ask,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log), interactive=True)
+    assert len(ask.calls) == 1  # the second hit finishes without a new question
+    assert result.stopped_reason == "limit-exhausted"
+    assert "missing header" in result.proposal
+    assert "not a final conclusion" in result.proposal  # fragment marked non-final
+    assert result.variants
+
+
+def test_limit_finish_choice_wraps_up_with_evidence(jail, tmp_path):
+    sb, log = jail
+    client = ScriptedClient([TRUNCATED])
+    ask = scripted_channel({"status": "answered",
+                            "choice": "finish the analysis — wrap up with the evidence"})
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=ask,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log), interactive=True)
+    assert len(ask.calls) == 1
+    assert result.stopped_reason == "limit-exhausted"
+    assert "missing header" in result.proposal
+    assert "unfinished fragment" in result.proposal
+    assert result.variants
+
+
+def test_limit_unrecognized_answer_finishes_rather_than_spends_budget(jail, tmp_path):
+    # spending more token budget needs an explicit choice; free text means finish
+    sb, log = jail
+    client = ScriptedClient([TRUNCATED, Response(content="SHOULD NOT HAPPEN")])
+    ask = scripted_channel({"status": "answered",
+                            "free_text": "try checking the kernel config"})
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=ask,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log), interactive=True)
+    assert len(ask.calls) == 1
+    assert result.stopped_reason == "limit-exhausted"
+    assert "SHOULD NOT HAPPEN" not in result.proposal
+
+
+def test_limit_eof_answer_finishes(jail, tmp_path):
+    sb, log = jail
+    client = ScriptedClient([TRUNCATED])
+    ask = scripted_channel({"status": "no-answer", "reason": "eof"})
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=ask,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log), interactive=True)
+    assert result.stopped_reason == "limit-exhausted"
+
+
+def test_limit_narrow_choice_shrinks_tool_results(jail, tmp_path):
+    from emerge_ai.agent import MAX_TOOL_RESULT_CHARS
+
+    sb, log = jail
+    client = ScriptedClient([
+        TRUNCATED,
+        {"grep_log": {"path": log, "pattern": "noise"}},  # 300 matches — big result
+        Response(content="NARROWED PROPOSAL"),
+    ])
+    ask = scripted_channel({"status": "answered",
+                            "choice": "narrow the analysis — shorter windows"})
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=3, ask_channel=ask,
+                          audit_path=str(tmp_path / "decisions.log"))
+    result = agent.propose(incident(log), interactive=True)
+    assert agent._narrow is True
+    assert result.proposal == "NARROWED PROPOSAL"
+    # «свернуть разбор»: tool results after the choice respect the smaller cap (D3)
+    assert client.seen_tool_results
+    for r in client.seen_tool_results:
+        assert len(json.loads(r)["content"]) <= MAX_TOOL_RESULT_CHARS // 4
+
+
+def test_limit_noninteractive_audits_and_never_asks(jail, tmp_path, capsys):
+    # spec «Исчерпание лимита в неинтерактиве»: no prompt, audit line, stderr note
+    sb, log = jail
+    audit_file = tmp_path / "decisions.log"
+    client = ScriptedClient([TRUNCATED])
+    agent = IncidentAgent(
+        client, sb, rules="R", max_rounds=3,
+        ask_channel=lambda q, o: pytest.fail("must not ask in a non-interactive run"),
+        audit_path=str(audit_file),
+    )
+    result = agent.propose(incident(log))
+    assert result.stopped_reason == "limit-exhausted"
+    assert "missing header" in result.proposal and "unfinished fragment" in result.proposal
+    entry = json.loads(audit_file.read_text().strip())
+    assert entry["kind"] == "agent-limit" and entry["decision"] == "finish"
+    assert entry["reason"].startswith("agent limit exhausted (tokens)")
+    assert entry["incident_class"] == "compile"
+    err = capsys.readouterr().err
+    assert "agent limit exhausted (tokens)" in err
+    assert "agent unavailable" not in err and "agent stopped" not in err
+
+
+def test_limit_other_errors_keep_the_unfazed_agent_stopped_path(jail, tmp_path):
+    # spec «Сбой эндпоинта — не лимит»: genuine failures keep old semantics
+    sb, log = jail
+    from emerge_ai.llm import LLMError
+
+    class BrokenClient:
+        def chat(self, messages, tools=None, temperature=0.2):
+            raise LLMError("endpoint is down")
+
+        def render(self, resp, stream=None):
+            pass
+
+    agent = IncidentAgent(BrokenClient(), sb, rules="R", max_rounds=3,
+                          audit_path=str(tmp_path / "decisions.log"))
     result = agent.propose(incident(log))
     assert result.stopped_reason == "budget-or-error"
-    assert result.tool_calls_used <= 4
+    assert result.proposal.startswith("agent stopped:")
 
 
 @pytest.mark.integration

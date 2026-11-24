@@ -30,6 +30,22 @@ class LLMError(RuntimeError):
     pass
 
 
+class LimitExhausted(LLMError):
+    """Distinguishable 'a limit was hit' signal (spec: Исчерпание лимита токенов):
+    reason is "tokens" (endpoint truncated the answer) or "rounds" (tool-loop
+    budget). Carries the partial answer and the message history so the operator
+    can resume the analysis from where it stopped."""
+
+    def __init__(self, reason: str, partial: "Response | None" = None,
+                 messages: list | None = None):
+        detail = ("endpoint truncated the answer at the token/context limit"
+                  if reason == "tokens" else "tool-round budget exhausted")
+        super().__init__(f"emerge-ai: limit exhausted ({reason}): {detail}")
+        self.reason = reason
+        self.partial = partial
+        self.messages = messages or []
+
+
 class LLMClient:
     def __init__(self, cfg: Config, timeout: float = 240.0, *, show_reasoning: bool = False):
         self.cfg = cfg
@@ -119,6 +135,9 @@ def run_tool_loop(
         last = client.chat(msgs, tools=tools)
         if render_to is not None:
             client.render(last, stream=render_to)
+        if last.finish_reason == "length":
+            # truncated generation — never treat it as a final answer (task 1.2)
+            raise LimitExhausted("tokens", partial=last, messages=msgs)
         if not last.tool_calls:
             return last
         msgs.append(
@@ -144,4 +163,4 @@ def run_tool_loop(
                     "content": json.dumps(result, ensure_ascii=False),
                 }
             )
-    raise LLMError("emerge-ai: tool loop exceeded max rounds without an answer")
+    raise LimitExhausted("rounds", partial=last, messages=msgs)

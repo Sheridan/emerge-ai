@@ -283,6 +283,87 @@ def test_incident_consults_agent_and_prints_proposal(emerge_stub, ok_compat, mon
     assert "\x1b" not in err
 
 
+def test_agent_limit_exhaustion_is_not_unavailable(emerge_stub, ok_compat, monkeypatch,
+                                                   tmp_path, capsys):
+    """M13: исчерпание лимита — не сбой эндпоинта: ни «agent unavailable»,
+    ни изменения исходного кода завершения emerge."""
+    from emerge_ai.llm import LimitExhausted
+
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: write access denied: /usr/share/x")
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://localhost:1/v1", "model": "m"}')
+
+    def limit_agent(inc):
+        raise LimitExhausted("tokens", messages=[])
+
+    rc = cli.main(
+        ["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        config_path=str(cfg),
+        plan_fn=lambda a, s: None,
+        protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+        agent_fn=limit_agent,
+    )
+    assert rc == 1  # исходный код сбоя emerge не тронут
+    err = capsys.readouterr().err
+    assert "agent limit exhausted" in err
+    assert "agent unavailable" not in err
+
+
+def test_agent_limit_noninteractive_cli_audits_and_never_asks(emerge_stub, ok_compat,
+                                                              monkeypatch, tmp_path, capsys):
+    """Сценарий «Исчерпание лимита в неинтерактиве» сквозём через CLI: вопрос не
+    задаётся, в decisions.log — запись, код выхода прежний."""
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: write access denied: /usr/share/x")
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "core.md").write_text("Be terse.")
+    monkeypatch.setenv("EMERGE_AI_PROMPTS_DIR", str(rules))
+    monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
+    audit_file = tmp_path / "decisions.log"
+    monkeypatch.setattr("emerge_ai.agent.gate_mod.AUDIT_PATH", str(audit_file))
+    monkeypatch.setattr(builtins, "input", lambda p="": pytest.fail("must not ask"))
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://127.0.0.1:9/v1", "model": "m"}')
+
+    class TruncatingClient:
+        def __init__(self, cfg, show_reasoning=False):
+            pass
+
+        def chat(self, messages, tools=None, temperature=0.2):
+            from emerge_ai.llm import Response
+            return Response(content="half an idea", finish_reason="length")
+
+        def render(self, resp, stream=None):
+            pass
+
+    scripted = TruncatingClient(None)
+    monkeypatch.setattr(cli, "LLMClient", lambda cfg, **kw: scripted)
+
+    rc = cli.main(
+        ["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        config_path=str(cfg),
+        plan_fn=lambda a, s: None,
+        protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "agent limit exhausted (tokens)" in err and "agent unavailable" not in err
+    entries = [json.loads(line) for line in audit_file.read_text().splitlines()]
+    entry = next(e for e in entries if e.get("kind") == "agent-limit")
+    assert entry["decision"] == "finish"
+    assert entry["run_id"]  # run identity from the CLI (task 2.3)
+
+
 def test_agent_proposal_tty_gets_two_colors(emerge_stub, ok_compat, monkeypatch, tmp_path):
     binary, _ = emerge_stub
     monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: write access denied: /usr/share/x")

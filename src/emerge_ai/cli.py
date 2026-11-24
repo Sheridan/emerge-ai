@@ -21,7 +21,7 @@ from emerge_ai import changelog, config_edit, digest, etcupdate, journal
 from emerge_ai import gate as gate_mod, init_check
 from emerge_ai import overlay as overlay_mod
 from emerge_ai.incident import build_incident
-from emerge_ai.llm import LLMClient, LLMError
+from emerge_ai.llm import LLMClient, LLMError, LimitExhausted
 from emerge_ai.plan import build_plan, build_plan_from_output
 from emerge_ai import rollback as rollback_mod
 from emerge_ai.rollback import Protection
@@ -432,6 +432,8 @@ def _maybe_agent(
 ) -> str | None:
     if not run.incident:
         return None
+    # the limit-exhaustion audit needs the run identity (tasks 2.3)
+    run.incident.setdefault("run_id", run.run_id)
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
@@ -463,6 +465,12 @@ def _maybe_agent(
         print(ui.info("agent proposal:"), file=sys.stderr)
         ui.paint_llm_block(proposal, cfg.llm_colors, sys.stderr)
         return proposal
+    except LimitExhausted as exc:
+        # a limit hit is not a broken agent (design D5): an agent_fn that
+        # could not settle it itself still finishes the run quietly — never
+        # the «agent unavailable» line, never a changed exit code
+        print(ui.err(f"agent limit exhausted: {exc}; no proposal was issued"), file=sys.stderr)
+        return None
     except Exception as exc:  # agent must never mask the original failure rc
         print(ui.err(f"agent unavailable: {exc}"), file=sys.stderr)
         return None
