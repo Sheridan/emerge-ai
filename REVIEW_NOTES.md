@@ -185,7 +185,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
 
 ## L — гигиена / документация / тесты
 
-### L1. Опечатка в LIVE_CHECKS.md
+### L1. Опечатка в LIVE_CHECKS.md — закрыто (change `fix-live-checks-typo`)
 - `## 14.2`: «`emerge-ai emerge-ai -av`» — двойное слово.
 
 ### L2. `confirm(prompt, stream=sys.stdin)` — `stream` игнорируется
