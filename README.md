@@ -102,7 +102,8 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
 
 - `endpoint` — OpenAI-совместимый base URL (`/v1/chat/completions`).
 - `model` — имя модели у провайдера.
-- `language` — `auto` (из `LANG`/`LC_*`) либо явно (`russian`, `english`, ...).
+- `language` — `auto` (из `LANG`/`LC_*`) либо явно (`russian`, `english`, ...);
+  действует и на обоснования LLM-сверки конфиг-файлов (JSON-ключи решения не переводятся).
 - `web_access` — разрешён ли агенту веб-поиск при диагностике (по умолч. вкл).
   При etc-конфигуровке документация подтягивается реально: для путей
   `package.use*/<cat>/<pn>` — страница `packages.gentoo.org`, для прочих файлов —

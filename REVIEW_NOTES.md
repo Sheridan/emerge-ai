@@ -168,7 +168,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   LLM-отбор (changelog.py:19-140), но вызов — только ручной флаг (cli.py:296-297);
   `post_run_digest` changelog не дёргает, опции конфига нет. Частично реализовано.
 
-### M12. Язык обоснований etc-update не подключён
+### M12. Язык обоснований etc-update не подключён — закрыто (change `etc-update-language`)
 - Спек `etc-update-llm` «Язык обоснований»: разбор config-файлов — на языке конфига.
   В `etcupdate.py` слово `language` не встречается вообще: `ETC_SYSTEM`/`build_merge_prompt`
   (etcupdate.py:60-90) не содержат языковой директивы, `cli._etc_flow` не передаёт

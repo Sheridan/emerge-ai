@@ -11,8 +11,16 @@ FIX = Path("tests/fixtures/etc")
 
 
 def test_decision_schema_demands_plain_reason():
-    msgs = etcupdate.build_merge_prompt("new", "cur", [])
+    msgs = etcupdate.build_merge_prompt("new", "cur", [], "english")
     assert "plain text, no markdown" in msgs[1]["content"]
+
+
+def test_merge_prompt_carries_language_directive():
+    for lang in ("de", "russian"):
+        msgs = etcupdate.build_merge_prompt("n", "c", [], lang)
+        assert f"respond in {lang}" in msgs[0]["content"]
+        # machine part of the contract stays language-neutral
+        assert '"action"' in msgs[1]["content"]
 
 EMERGE_OUT = """ * --- Failed to merge /etc/ssh/sshd_config
  * Please move /var/tmp/... 
@@ -107,14 +115,16 @@ def test_parse_override():
         etcupdate.parse_override("merge", llm)
 
 
-def _cfg_dir(tmp_path, llm_flag=True, web_flag=False):
+def _cfg_dir(tmp_path, llm_flag=True, web_flag=False, language=None):
     etc = tmp_path / "etc" / "ssh"
     etc.mkdir(parents=True)
     (etc / "sshd_config").write_text("Port 2222\nPermitRootLogin yes\n")
     (etc / "._cfg0000_sshd_config").write_text("Port 22\nKexAlgorithms x\n")
     cfg = tmp_path / "cfg.json"
-    cfg.write_text(json.dumps(
-        {"endpoint": "http://x/v1", "etc_update_llm": llm_flag, "web_access": web_flag}))
+    data = {"endpoint": "http://x/v1", "etc_update_llm": llm_flag, "web_access": web_flag}
+    if language:
+        data["language"] = language
+    cfg.write_text(json.dumps(data))
     return cfg, etc
 
 
@@ -234,6 +244,28 @@ def test_etc_flow_web_error_leaves_empty_docs(tmp_path, capsys, monkeypatch):
     assert "(none; prefer keep-current)" in client.messages[1]["content"]
 
 
+def test_llm_decide_parses_german_reason(tmp_path):
+    new = tmp_path / "._cfg0000_sshd_config"
+    new.write_text("Port 22\n")
+    cur = tmp_path / "sshd_config"
+    cur.write_text("Port 2222\n")
+    client = FakeClient({"action": "keep-current", "reason": "Belege fehlen", "citations": ["d"]})
+    decision = etcupdate.llm_decide(client, str(new), str(cur), [], "de")
+    assert decision == {"action": "keep-current", "reason": "Belege fehlen", "citations": ["d"]}
+    assert "respond in de" in client.messages[0]["content"]
+
+
+def test_etc_flow_language_reaches_llm(tmp_path, capsys):
+    cfg, etc = _cfg_dir(tmp_path, language="de")
+    client = FakeClient({"action": "keep-current", "reason": "Keine Belege", "citations": ["d"]})
+    run = type("R", (), {"incident": incident_for(etc)})()
+    _etc_flow(run, str(cfg), llm=True, input_fn=lambda p: "y",
+              client_factory=lambda c, **kw: client)
+    err = capsys.readouterr().err
+    assert "LLM decision: keep-current — Keine Belege" in err
+    assert "respond in de" in client.messages[0]["content"]
+
+
 def test_etc_flow_web_access_off_never_fetches(tmp_path, capsys, monkeypatch):
     cfg, etc = _cfg_dir(tmp_path, web_flag=False)
     from emerge_ai import sandbox as sandbox_mod
@@ -264,6 +296,7 @@ def test_etc_live_replay_sshd_fixture():
             decision = etcupdate.llm_decide(
                 LLMClient(cfg),
                 str(FIX / "sshd_config.new"), str(FIX / "sshd_config.current"), docs,
+                cfg.resolved_language(),
             )
             assert decision["action"] in ("merge", "keep-current"), decision
             assert decision["citations"]

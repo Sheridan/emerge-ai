@@ -211,7 +211,7 @@ def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None
         # not a precondition for the LLM decision)
         docs = etcupdate.collect_docs(current, web_fetch=None if sandbox is None else lambda p: _pkg_docs(sandbox, p))
         try:
-            decision = etcupdate.llm_decide(client_factory(cfg, show_reasoning=show_reasoning), newp, current, docs)
+            decision = etcupdate.llm_decide(client_factory(cfg, show_reasoning=show_reasoning), newp, current, docs, cfg.resolved_language())
         except Exception as exc:  # now genuinely LLM-only (design D4)
             print(ui.err(f"etc LLM unavailable: {exc}"), file=sys.stderr)
             continue

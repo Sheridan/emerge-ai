@@ -63,16 +63,19 @@ DECISION_SCHEMA = """Answer with ONE JSON object, no prose:
  "citations": ["path-or-url: quote fragment"],
  "merged_text": "only when action=merge, the FULL final file text"}"""
 
-ETC_SYSTEM = (
-    "You are the config-merge assistant of emerge-ai (Gentoo). A package installed a new "
-    "config file that portage protected. Decide: keep-current (user's file wins), "
-    "take-new (package default wins), or merge (preserve user customizations AND adopt "
-    "necessary new upstream options). Cite the documented options from the provided docs "
-    "or web excerpts for every claim. If evidence is insufficient, choose keep-current."
-)
+def etc_system(language: str) -> str:
+    return (
+        "You are the config-merge assistant of emerge-ai (Gentoo). A package installed a new "
+        "config file that portage protected. Decide: keep-current (user's file wins), "
+        "take-new (package default wins), or merge (preserve user customizations AND adopt "
+        "necessary new upstream options). Cite the documented options from the provided docs "
+        "or web excerpts for every claim. If evidence is insufficient, choose keep-current. "
+        f"Always respond in {language}: the human-readable fields (reason) are written in "
+        f"{language}; JSON keys and action codes stay exactly as specified."
+    )
 
 
-def build_merge_prompt(new_text: str, current_text: str, docs: list[tuple[str, str]]) -> list[dict]:
+def build_merge_prompt(new_text: str, current_text: str, docs: list[tuple[str, str]], language: str) -> list[dict]:
     doc_block = "\n\n".join(
         injection.wrap_untrusted(f"{src}\n{text}", source=f"doc:{src}") for src, text in docs
     )
@@ -86,7 +89,7 @@ def build_merge_prompt(new_text: str, current_text: str, docs: list[tuple[str, s
         + "\n\n"
         + DECISION_SCHEMA
     )
-    return [{"role": "system", "content": ETC_SYSTEM}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": etc_system(language)}, {"role": "user", "content": user}]
 
 
 def parse_decision(reply: str) -> dict:
@@ -103,10 +106,10 @@ def parse_decision(reply: str) -> dict:
     return d
 
 
-def llm_decide(client, new_path: str, current_path: str, docs: list[tuple[str, str]]) -> dict:
+def llm_decide(client, new_path: str, current_path: str, docs: list[tuple[str, str]], language: str) -> dict:
     new_text = Path(new_path).read_text(errors="replace")
     current_text = Path(current_path).read_text(errors="replace") if Path(current_path).exists() else ""
-    reply = client.chat(build_merge_prompt(new_text, current_text, docs))
+    reply = client.chat(build_merge_prompt(new_text, current_text, docs, language))
     reply = getattr(reply, "content", reply) or ""
     return parse_decision(reply)
 
