@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import inspect
 import os
+import re
 import sys
 from pathlib import Path
 from dataclasses import asdict
+from urllib.parse import quote
 
 from emerge_ai import __version__, portage_compat, state
 from emerge_ai.compat import check_version_compat
@@ -142,6 +144,38 @@ def _maybe_agent(
         return None
 
 
+_PKG_NAME = r"[A-Za-z0-9+_][A-Za-z0-9+._-]*"
+_PKG_USE_PATH_RE = re.compile(
+    rf"package\.(?:use|accept_keywords|mask|unmask)[^/]*/({_PKG_NAME})/({_PKG_NAME})/?$")
+_ETC_SUFFIX_RE = re.compile(r"(\.pre-emerge-ai|_etc-update-new)$|-r\d+$")
+
+
+def _pkg_docs(sandbox, path: str) -> list[tuple[str, str]]:
+    """Web documentation context for one config file (spec: etc-update-llm).
+
+    A <cat>/<pn> pair under package.use*/package.accept_keywords/package.mask/
+    package.unmask resolves to its packages.gentoo.org page; anything else
+    falls back to a wiki search on the file's basename. Every failure mode
+    (fetch error, empty page) yields [] with a warning — never an exception,
+    so an unreachable network cannot skip the LLM decision (design D3).
+    """
+    m = _PKG_USE_PATH_RE.search(path)
+    if m:
+        url = f"https://packages.gentoo.org/packages/{m.group(1)}/{m.group(2)}"
+    else:
+        q = _ETC_SUFFIX_RE.sub("", Path(path).name)
+        url = f"https://wiki.gentoo.org/index.php?search={quote(q, safe='')}&fulltext=1"
+    try:
+        r = sandbox.web_fetch(url)
+    except Exception as exc:  # web_fetch itself shouldn't raise, belt-and-braces
+        r = {"error": str(exc)}
+    if "content" not in r or not r["content"].strip():
+        reason = r.get("error", "empty response")
+        print(ui.warn(f"web docs unavailable for {path}: {reason}"), file=sys.stderr)
+        return []
+    return [(r["url"], r["content"])]
+
+
 def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None, show_reasoning=False) -> None:
     if not run.incident or run.incident.get("class") != "config-protect":
         return
@@ -164,21 +198,21 @@ def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None
         return
     if client_factory is None:
         client_factory = LLMClient
+    sandbox = None
+    if cfg.web_access:
+        from emerge_ai.sandbox import Sandbox
+
+        sandbox = Sandbox()  # one sandbox for the whole flow, not per file
     for newp in paths:
         current = etcupdate.original_of(newp)
         if not Path(newp).exists():
             continue
+        # web phase never raises: fetch trouble yields [] (spec: network is
+        # not a precondition for the LLM decision)
+        docs = etcupdate.collect_docs(current, web_fetch=None if sandbox is None else lambda p: _pkg_docs(sandbox, p))
         try:
-            web = None
-            if cfg.web_access:
-                from emerge_ai.sandbox import Sandbox
-
-                def web(path, _sb=Sandbox()):
-                    r = _sb.web_fetch("https://wiki.gentoo.org/")
-                    return [(r["url"], r["text"])]
-            docs = etcupdate.collect_docs(current, web_fetch=web)
             decision = etcupdate.llm_decide(client_factory(cfg, show_reasoning=show_reasoning), newp, current, docs)
-        except Exception as exc:
+        except Exception as exc:  # now genuinely LLM-only (design D4)
             print(ui.err(f"etc LLM unavailable: {exc}"), file=sys.stderr)
             continue
         print(ui.info(f"LLM decision: {decision['action']} — {decision.get('reason', '')}"),

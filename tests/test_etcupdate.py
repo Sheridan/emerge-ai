@@ -107,14 +107,14 @@ def test_parse_override():
         etcupdate.parse_override("merge", llm)
 
 
-def _cfg_dir(tmp_path, llm_flag=True):
+def _cfg_dir(tmp_path, llm_flag=True, web_flag=False):
     etc = tmp_path / "etc" / "ssh"
     etc.mkdir(parents=True)
     (etc / "sshd_config").write_text("Port 2222\nPermitRootLogin yes\n")
     (etc / "._cfg0000_sshd_config").write_text("Port 22\nKexAlgorithms x\n")
     cfg = tmp_path / "cfg.json"
     cfg.write_text(json.dumps(
-        {"endpoint": "http://x/v1", "etc_update_llm": llm_flag, "web_access": False}))
+        {"endpoint": "http://x/v1", "etc_update_llm": llm_flag, "web_access": web_flag}))
     return cfg, etc
 
 
@@ -159,6 +159,92 @@ def test_etc_flow_user_override(tmp_path, capsys):
     _etc_flow(run, str(cfg), llm=True,
               input_fn=lambda p: next(inputs), client_factory=lambda c, **kw: client)
     assert (etc / "sshd_config").read_text() == "MINE\n"
+
+
+def _package_use_dir(tmp_path):
+    pu = tmp_path / "etc" / "portage" / "package.use" / "dev-libs"
+    pu.mkdir(parents=True)
+    (pu / "foo").write_text("dev-libs/foo static\n")
+    (pu / "._cfg0000_foo").write_text("dev-libs/foo\n")
+    return pu
+
+
+def _web_flaky(monkeypatch, result):
+    """Patch Sandbox.web_fetch; returns the list of requested URLs."""
+    from emerge_ai import sandbox as sandbox_mod
+
+    urls = []
+
+    def fake(self, url):
+        urls.append(url)
+        return dict(url=url, **result) if "error" not in result else dict(result)
+
+    monkeypatch.setattr(sandbox_mod.Sandbox, "web_fetch", fake)
+    return urls
+
+
+KEEP = {"action": "keep-current", "reason": "r", "citations": ["d"]}
+
+
+def _isolate_doc_roots(monkeypatch):
+    """Local doc scan hits the real host (/usr/share/doc) — empty it so web
+    context is the only variable in these tests."""
+    from emerge_ai import cli as cli_mod
+
+    real = cli_mod.etcupdate.collect_docs
+    monkeypatch.setattr(cli_mod.etcupdate, "collect_docs",
+                        lambda p, web_fetch=None: real(p, web_fetch=web_fetch, doc_roots=()))
+
+
+def test_etc_flow_web_fetch_catalog_and_wiki(tmp_path, capsys, monkeypatch):
+    _isolate_doc_roots(monkeypatch)
+    cfg, etc = _cfg_dir(tmp_path, web_flag=True)
+    pu = _package_use_dir(tmp_path)
+    urls = _web_flaky(monkeypatch, {"content": "WEBDOC-TEXT", "truncated": False})
+    client = FakeClient(KEEP)
+    run = type("R", (), {"incident": {
+        "class": "config-protect",
+        "stderr_tail": f">>> {etc / '._cfg0000_sshd_config'}\n>>> {pu / '._cfg0000_foo'}\n",
+    }})()
+    _etc_flow(run, str(cfg), llm=True, input_fn=lambda p: "y",
+              client_factory=lambda c, **kw: client)
+    err = capsys.readouterr().err
+    assert "etc LLM unavailable" not in err
+    wiki = next(u for u in urls if "wiki.gentoo.org" in u)
+    assert "search=sshd_config" in wiki and "fulltext=1" in wiki
+    catalog = next(u for u in urls if "packages.gentoo.org" in u)
+    assert catalog.endswith("/packages/dev-libs/foo")
+    # fetched content actually reaches the prompt (FakeClient keeps last messages)
+    assert "WEBDOC-TEXT" in client.messages[1]["content"]
+
+
+def test_etc_flow_web_error_leaves_empty_docs(tmp_path, capsys, monkeypatch):
+    _isolate_doc_roots(monkeypatch)
+    cfg, etc = _cfg_dir(tmp_path, web_flag=True)
+    urls = _web_flaky(monkeypatch, {"error": "network down"})
+    client = FakeClient(KEEP)
+    run = type("R", (), {"incident": incident_for(etc)})()
+    _etc_flow(run, str(cfg), llm=True, input_fn=lambda p: "y",
+              client_factory=lambda c, **kw: client)
+    err = capsys.readouterr().err
+    assert urls  # a fetch was attempted
+    assert "web docs unavailable" in err and "network down" in err
+    assert "etc LLM unavailable" not in err  # the file was NOT silently skipped
+    assert client.calls == 1
+    assert "(none; prefer keep-current)" in client.messages[1]["content"]
+
+
+def test_etc_flow_web_access_off_never_fetches(tmp_path, capsys, monkeypatch):
+    cfg, etc = _cfg_dir(tmp_path, web_flag=False)
+    from emerge_ai import sandbox as sandbox_mod
+
+    monkeypatch.setattr(sandbox_mod.Sandbox, "web_fetch",
+                        lambda self, url: pytest.fail("must not fetch"))
+    client = FakeClient(KEEP)
+    run = type("R", (), {"incident": incident_for(etc)})()
+    _etc_flow(run, str(cfg), llm=True, input_fn=lambda p: "y",
+              client_factory=lambda c, **kw: client)
+    assert client.calls == 1  # decision made without any web context
 
 
 @pytest.mark.integration
