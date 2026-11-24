@@ -113,3 +113,18 @@ emerge-ai -p app-editors/vim
 emerge-ai -p app-editors/vim
 #   → как в (2): сводка молча отсутствует, план-фаза не сломана, выход 0
 ```
+
+## Авто-changelog-дайджест (auto-changelog-digest, выполняет пользователь)
+
+```bash
+# 1) выключенная опция (default): ключа changelog_digest нет в конфиге
+emerge-ai --noninteractive -a =app-misc/small-1.0   # или другой быстрой сборке
+#   → после прогона «run digest:» нет, «changelog digest» нет, сетевых обращений нет
+# 2) включённая опция с рабочим endpoint
+#    в /etc/portage/emerge-ai.json: "changelog_digest": true
+emerge-ai --noninteractive -a =app-misc/small-1.0
+#   → в stderr «emerge-ai changelog digest:» (LLM-блок), в отчёте
+#     /var/lib/emerge-ai/runs/<id>.json поле "changelog" непустое
+# 3) endpoint неработоспособен/пустой при включённой опции
+#   → raw-перечень «changelog digest (raw):» или warning «changelog digest skipped»,
+#     код возврата прогона не меняется

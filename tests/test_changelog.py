@@ -68,3 +68,28 @@ def test_llm_digest_marks_unavailable():
 def test_use_diff():
     d = changelog.use_diff({"a/b-1": {"x", "y"}}, {"a/b-1": {"y", "z"}})
     assert d == ["a/b-1: +USE z", "a/b-1: -USE x"]
+
+
+def test_llm_digest_run_packages_are_wrapped_into_prompt():
+    class Fake:
+        def chat(self, messages, tools=None, temperature=0.2):
+            self.messages = messages
+            return type("R", (), {"content": "ok"})()
+    f = Fake()
+    items = [{"source": "git:upstream.git", "title": "fix: security patch X", "text": "x"}]
+    changelog.llm_digest(f, items, [], ["app-misc/foo-1.0", "dev-libs/bar-2.0"])
+    user = f.messages[1]["content"]
+    assert "Merged in this run: app-misc/foo-1.0, dev-libs/bar-2.0" in user
+    assert "UNTRUSTED-DATA-BEGIN" in user and "source=run-plan" in user
+
+
+def test_llm_digest_without_packages_prompt_unchanged():
+    class Fake:
+        def chat(self, messages, tools=None, temperature=0.2):
+            self.messages = messages
+            return type("R", (), {"content": "ok"})()
+    items = [{"source": "git:upstream.git", "title": "t", "text": "x"}]
+    a, b = Fake(), Fake()
+    changelog.llm_digest(a, items, ["github:foo/bar (OSError)"])
+    changelog.llm_digest(b, items, ["github:foo/bar (OSError)"], [])
+    assert a.messages == b.messages

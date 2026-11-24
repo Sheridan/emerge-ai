@@ -11,7 +11,7 @@ def test_defaults():
     assert cfg.language == "auto"
     assert cfg.web_access is True
     assert cfg.show_digest is True and cfg.etc_update_after_build is True
-    assert cfg.changelog_digest is True
+    assert cfg.changelog_digest is False  # auto digest is opt-in (run-reporting)
 
 
 def test_canonical_keys_apply_without_warnings(tmp_path, capsys):

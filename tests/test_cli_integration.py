@@ -491,8 +491,6 @@ def test_e2e_pretend_neither_asks_nor_reads_stdin(emerge_stub, ok_compat, monkey
 
 
 def test_plan_phase_llm_summary_with_endpoint(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
-    from emerge_ai.plan import Plan, PlanEntry
-
     binary, calls = emerge_stub
     cfg = tmp_path / "cfg.json"
     cfg.write_text('{"endpoint": "http://localhost:1/v1", "model": "m"}')
@@ -517,8 +515,6 @@ def test_plan_phase_llm_summary_with_endpoint(emerge_stub, ok_compat, monkeypatc
 
 
 def test_plan_phase_no_llm_summary_without_endpoint(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
-    from emerge_ai.plan import Plan, PlanEntry
-
     binary, calls = emerge_stub
     cfg = tmp_path / "cfg.json"
     cfg.write_text("{}")
@@ -533,3 +529,97 @@ def test_plan_phase_no_llm_summary_without_endpoint(emerge_stub, ok_compat, monk
     assert rc == 0
     out = capsys.readouterr().out
     assert "plan digest:" in out and "llm summary:" not in out
+
+
+def _changelog_cfg(tmp_path, **extra):
+    news = tmp_path / "news"
+    news.mkdir(exist_ok=True)
+    (news / "2026-01-01-openssl.news").write_text("Title: OpenSSL upgrade needed\nDo things.\n")
+    cfg = tmp_path / "cfg.json"
+    data = {"show_digest": False, "news_dir": str(news), "gh_repos": [], "git_urls": []}
+    data.update(extra)
+    cfg.write_text(json.dumps(data))
+    return cfg
+
+
+def test_post_run_changelog_off_by_default(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    cfg = _changelog_cfg(tmp_path)
+
+    def no_call(*a, **k):
+        raise AssertionError("collect_digest must not run when changelog_digest is off")
+
+    monkeypatch.setattr(cli.changelog, "collect_digest", no_call)
+    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    assert "changelog digest" not in capsys.readouterr().err
+
+
+def test_post_run_changelog_on_saves_report(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    cfg = _changelog_cfg(tmp_path, changelog_digest=True, endpoint="http://localhost:1/v1")
+    runs = tmp_path / "runs"
+    runs.mkdir()
+
+    class FakeClient:
+        def __init__(self, cfg, show_reasoning=False):
+            pass
+
+        def chat(self, messages):
+            assert "Merged in this run: app-misc/foo-1.0" in messages[1]["content"]
+            return type("R", (), {"content": "- OpenSSL upgrade needed"})()
+
+    monkeypatch.setattr(cli, "LLMClient", FakeClient)
+    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(runs),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "emerge-ai changelog digest:" in err and "OpenSSL upgrade needed" in err
+    assert state.latest_incomplete(runs_dir=runs) is None  # run completed; report saved anyway
+    saved = [state.load_run(p.stem, runs_dir=runs) for p in runs.glob("*.json")]
+    assert any(r.changelog and "OpenSSL" in r.changelog for r in saved)
+
+
+def test_post_run_changelog_without_endpoint_is_raw(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    cfg = _changelog_cfg(tmp_path, changelog_digest=True)
+
+    def no_client(cfg, show_reasoning=False):
+        raise AssertionError("no LLMClient without endpoint")
+
+    monkeypatch.setattr(cli, "LLMClient", no_client)
+    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "changelog digest (raw):" in err and "OpenSSL upgrade needed" in err
+
+
+def test_post_run_changelog_failure_keeps_rc(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    cfg = _changelog_cfg(tmp_path, changelog_digest=True)
+
+    def boom(*a, **k):
+        raise RuntimeError("source exploded")
+
+    monkeypatch.setattr(cli.changelog, "collect_digest", boom)
+    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    assert "changelog digest skipped: source exploded" in capsys.readouterr().err
+
+
+def test_post_run_changelog_not_called_on_failure(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+    cfg = _changelog_cfg(tmp_path, changelog_digest=True)
+
+    def no_call(*a, **k):
+        raise AssertionError("no changelog digest for a failed run")
+
+    monkeypatch.setattr(cli.changelog, "collect_digest", no_call)
+    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 1

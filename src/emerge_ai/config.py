@@ -20,7 +20,9 @@ DEFAULTS = {
     "web_access": True,
     "show_digest": True,
     "etc_update_after_build": True,
-    "changelog_digest": True,
+    # automatic changelog digest after a successful run; off by default:
+    # sources touch the network (spec: run-reporting, unset => silent)
+    "changelog_digest": False,
     "gh_repos": [],
     "git_urls": [],
     "news_dir": "/var/lib/eselect-news/news",
@@ -53,7 +55,7 @@ class Config:
     web_access: bool = True
     show_digest: bool = True
     etc_update_after_build: bool = True
-    changelog_digest: bool = True
+    changelog_digest: bool = False
     gh_repos: list = field(default_factory=list)
     git_urls: list = field(default_factory=list)
     news_dir: str = "/var/lib/eselect-news/news"

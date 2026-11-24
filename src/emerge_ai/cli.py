@@ -269,6 +269,22 @@ def _post_run_digest(run, output, config_path, runs_dir) -> None:
         cfg = Config()
     if cfg.show_digest:
         print(digest.post_run_digest(run, output), file=sys.stderr)
+    if cfg.changelog_digest and run.plan:
+        # automatic changelog digest after a successful run (spec: run-reporting);
+        # source or LLM failures must not touch the run's exit code
+        try:
+            client = LLMClient(cfg) if cfg.endpoint else None
+            text = changelog.collect_digest(
+                gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir,
+                client=client, packages=[e["cpv"] for e in run.plan],
+            )
+            if client is not None:
+                ui.paint_llm_block(text, cfg.llm_colors, sys.stderr)
+            else:
+                print(text, file=sys.stderr)
+            run.changelog = ui.strip_ansi(text)
+        except Exception as exc:
+            print(ui.warn(f"changelog digest skipped: {exc}"), file=sys.stderr)
 
 
 def _changelog_mode(config_path, show_reasoning=False) -> int:

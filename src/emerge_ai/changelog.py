@@ -95,12 +95,17 @@ CHANGE_SYSTEM = (
 )
 
 
-def llm_digest(client, items: list[dict], unavailable: list[str]) -> str:
+def llm_digest(client, items: list[dict], unavailable: list[str], packages: list[str] = ()) -> str:
     corpus = "\n\n".join(
         injection.wrap_untrusted(f"{i['source']} :: {i['title']}\n{i['text']}", source=i["source"])
         for i in items
     )
     tail = ("\n\nUnavailable sources: " + ", ".join(unavailable)) if unavailable else ""
+    if packages:
+        # focus the selection on what this run actually built (CPVs are foreign)
+        tail += "\n\n" + injection.wrap_untrusted(
+            "Merged in this run: " + ", ".join(packages), source="run-plan"
+        )
     resp = client.chat(
         [{"role": "system", "content": CHANGE_SYSTEM},
          {"role": "user", "content": (corpus or "(no items)") + tail}]
@@ -117,6 +122,7 @@ def collect_digest(
     glsa_index: str = GLESA_INDEX,
     fetch_json=None,
     client=None,
+    packages: list[str] = (),
 ) -> str:
     items, unavailable = [], []
     try:
@@ -148,4 +154,4 @@ def collect_digest(
         for u in unavailable:
             lines.append(f"- unavailable: {u}")
         return "emerge-ai changelog digest (raw):\n" + "\n".join(lines or ["- no changes found"])
-    return "emerge-ai changelog digest:\n" + llm_digest(client, items, unavailable)
+    return "emerge-ai changelog digest:\n" + llm_digest(client, items, unavailable, packages)

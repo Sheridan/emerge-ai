@@ -99,7 +99,7 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
   "language": "auto",
   "show_digest": true,
   "etc_update_after_build": true,
-  "changelog_digest": true,
+  "changelog_digest": false,
   "agent": {"web_access": true},
   "llm_colors": {"content": "cyan", "reasoning": "dim", "question": "yellow"}
 }
@@ -116,8 +116,9 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
   решение LLM всё равно выдаётся.
 - `show_digest` — печатать дайджест после успешного мерджа (default true).
 - `etc_update_after_build` — разбирать защищённые конфиг-файлы через LLM (default true).
-- `changelog_digest` — сокращать changelog-дайджест до «самого важного» через LLM
-  (default true; без `endpoint` — raw-лист).
+- `changelog_digest` — автоматически строить changelog-дайджест после успешного
+  прогона с собранными пакетами (default false; источники обращаются в сеть,
+  без `endpoint` — raw-лист; ручная команда `--changelog` работает всегда).
 - `llm_colors` — цвета блоков LLM-вывода (см. «Цвет вывода»); допустимы имена
   16 базовых цветов плюс `dim`/`bold`, а также `off`/`null` (выключить);
   невалидное имя — предупреждение и дефолт этого поля.
@@ -193,6 +194,9 @@ TTY на stdin. Во всех остальных режимах инструме
 - `emerge-ai --changelog` — дайджест изменений: локальные новости, GLESA-индекс,
   GitHub releases (`gh_repos`), shallow-клоны (`git_urls`, кэш `/var/cache/emerge-ai/git`);
   при наличии `endpoint` список сокращает LLM до «самого важного», без него — raw-лист.
+  С включённым `changelog_digest` тот же дайджест (с фокусом на собранные в прогоне
+  пакеты) печатается автоматически после успешного прогона и сохраняется в отчёт
+  прогона (`RunState.changelog`).
 
 ## Чек-лист ручной верификации на живом хосте (14.2, выполняет пользователь)
 
