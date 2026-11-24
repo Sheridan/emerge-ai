@@ -1,4 +1,5 @@
 import builtins
+import json
 
 import pytest
 
@@ -376,3 +377,63 @@ def test_call_agent_fn_adapts_signature():
     assert cli._call_agent_fn(modern, {"class": "x"}, True) == "p2"
     assert cli._call_agent_fn(star, {"class": "x"}, False) == "p3"
     assert calls == [("legacy",), ("modern", True), ("star", False)]
+
+
+NOT_SYSTEMD = lambda: False
+
+
+def test_openrc_host_refuses_plain_install(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(builtins, "input", lambda prompt="": pytest.fail("stdin read"))
+    rc = cli.main(["sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, systemd_check=NOT_SYSTEMD)
+    assert rc == 6
+    assert calls() == []  # emerge was never started, system untouched
+    err = capsys.readouterr().err
+    assert "systemd hosts only" in err
+
+
+def test_openrc_host_refuses_ask_before_plan(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, calls = emerge_stub
+    rc = cli.main(["-a", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, systemd_check=NOT_SYSTEMD)
+    assert rc == 6  # -a can mutate: refused even before the plan phase
+    assert calls() == []
+
+
+def test_openrc_host_pretend_warns_and_proceeds(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, calls = emerge_stub
+    rc = cli.main(["-p", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, systemd_check=NOT_SYSTEMD)
+    assert rc == 0
+    assert calls() == [["-p", "sys-apps/foo"]]
+    out = capsys.readouterr()
+    assert "STUB-OUT" in out.out
+    assert "no systemd detected" in out.err
+
+
+def test_openrc_host_ask_pretend_combo_warns_only(emerge_stub, ok_compat, tmp_path, capsys):
+    binary, calls = emerge_stub
+    rc = cli.main(["-a", "-p", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: None, systemd_check=NOT_SYSTEMD)
+    assert rc == 0  # pretend dominates => read-only => warn, no refusal
+    assert calls() == [["-p", "sys-apps/foo"]]
+    assert "no systemd detected" in capsys.readouterr().err
+
+
+def test_openrc_host_changelog_warns_and_proceeds(emerge_stub, ok_compat, tmp_path, capsys):
+    news = tmp_path / "news"
+    news.mkdir()
+    (news / "2026-01-01-x.news").write_text("Title: T\nBody.\n")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"news_dir": str(news), "gh_repos": [], "git_urls": []}))
+    rc = cli.main(["--changelog"], emerge_binary="false", runs_dir=str(tmp_path),
+                  config_path=str(cfg), systemd_check=NOT_SYSTEMD)
+    assert rc == 0
+    out = capsys.readouterr()
+    assert "no systemd detected" in out.err and "changelog digest" in out.out
+
+
+def test_meta_version_never_needs_systemd(tmp_path):
+    # --version exits in _meta_command before any init probe
+    assert cli.main(["--version"], runs_dir=str(tmp_path)) in (0, 3)

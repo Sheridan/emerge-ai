@@ -16,7 +16,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
-from emerge_ai import changelog, digest, etcupdate
+from emerge_ai import changelog, digest, etcupdate, init_check
 from emerge_ai.incident import build_incident
 from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan
@@ -332,6 +332,7 @@ def main(
     protect_fn=None,
     cleanup_fn=None,
     agent_fn=None,
+    systemd_check=init_check.is_systemd,
 ) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -346,11 +347,29 @@ def main(
     verbose = flag_present(emerge_args, VERBOSE_FLAGS)
 
     if mode.changelog:
+        if not systemd_check():
+            print(ui.warn(f"no systemd detected (init: {init_check.detected_init()}) — "
+                          "changelog digest is read-only and continues"), file=sys.stderr)
         return _changelog_mode(config_path, verbose)
 
     blocked = _compat_gate()
     if blocked is not None:
         return blocked
+
+    # systemd-only support (spec: cli-compat): refuse before any mutation;
+    # read-only (pretend) modes warn and work, unknown init fails closed
+    if not systemd_check():
+        init_name = init_check.detected_init()
+        if flag_present(emerge_args, PRETEND_FLAGS):
+            print(ui.warn(f"no systemd detected (init: {init_name}) — "
+                          "read-only modes only, plan proceeds without changes"),
+                  file=sys.stderr)
+        else:
+            print(ui.err(
+                "emerge-ai supports systemd hosts only; "
+                f"detected init: {init_name}; refusing to mutate this system (emerge not started)"
+            ), file=sys.stderr)
+            return 6
 
     run, emerge_args = _resolve_resume(emerge_args, mode, runs_dir)
 
