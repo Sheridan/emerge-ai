@@ -2,42 +2,55 @@
 
 ## Why
 
-README «Установка» (`README.md:8-30`) расходится с packaging-реальностью. Инструкция
-говорит «Для live-версии — распакуйте overlay и скопируйте **live-версию (9999)**»
-(`:10`) и даёт команду `ebuild /var/lib/overlay/emerge-ai/app-portage/emerge-ai/emerge-ai-9999.ebuild manifest`
-(`:21`) — но файла `emerge-ai-9999.ebuild` в репозитории нет: единственный ebuild —
-`packaging/app-portage/emerge-ai/emerge-ai-0.1.0.ebuild`, сам по себе live (git-r3 на
-`EGIT_REPO_URI`, `EGIT_BRANCH="master"`), без `KEYWORDS` (маскируется стабильными
-архитектурами по умолчанию). Инсталлятор по README спотыкается на первой же команде,
-а пользователь без `accept_keywords` не увидит пакет (REVIEW_NOTES L6).
+REVIEW_NOTES L6 напоминает: live-ebuild без стабильных версий допустим по спеке,
+но README должен объяснять keywording и live-природу пакета. Перевирка при
+подготовке apply показала, что более ранняя версия этого проposal опиралась на
+ложную посылку («единственный ebuild — `emerge-ai-0.1.0.ebuild`, файла
+`emerge-ai-9999.ebuild` нет, README указывает в никуда»). Фактически:
+единственный ebuild — `packaging/app-portage/emerge-ai/emerge-ai-9999.ebuild`
+(`EAPI=8`, `distutils-r1` + `git-r3`,
+`EGIT_REPO_URI=https://github.com/Sheridan/emerge-ai.git`,
+`EGIT_BRANCH="master"`, live-статус вытекает из git-r3/версии 9999, без
+`KEYWORDS`), и секция «Установка» README `:8-31` уже ему соответствует —
+копирование в оверлей, `ebuild … manifest`, `emerge -1av` применимы дословно.
+
+Из L6 остаются два реальных пробела:
+
+- шаг 3 README показывает только `app-portage/emerge-ai **` без объяснения
+  различия с явным `~arch` (`~amd64`) — пользователь получает избыточно широкую
+  маску как единственный вариант;
+- нет live-предупреждения: ставится HEAD `master`, а не релиз; Manifest
+  генерируется локально; воспроизводимость требует фиксации коммита
+  (`EGIT_COMMIT`).
 
 ## What Changes
 
-- Секция «Установка» README переписана под фактический файл `emerge-ai-0.1.0.ebuild`
-  (копирование в `cp /var/lib/overlay/emerge-ai/app-portage/emerge-ai/`, `ebuild … manifest`,
-  `emerge --metadata`, `emerge -av app-portage/emerge-ai`) — без упоминания
-  несуществующих `emerge-ai-9999.ebuild` / `emerge-ai-live-9999.ebuild`.
-- Добавлено примечание про acceptance keywords: для ebuild без `KEYWORDS` нужен
-  `accept_keywords = app-portage/emerge-ai **` в `make.conf`/`package.accept_keywords`
-  (или явный `~arch`), с пояснением различия.
-- Добавлено live-предупреждение: пакет ставится с HEAD upstream (`EGIT_BRANCH=master`),
- Manifest локальный (генерируется `ebuild manifest` на машине пользователя), для
-  воспроизводимости стоит зафиксировать коммит (`EGIT_COMMIT`).
-- Packaging-файлы в этом change не меняются (возможное добавление настоящего
-  `emerge-ai-live-9999.ebuild` или правка `EGIT_BRANCH` master-vs-main — отдельные
-  changes).
+- Шаг 3 README («Разрешить live-версию»): показать оба варианта
+  accept_keywords — `**` (все архитектуры, осознанный выбор для live git-r3) и
+  явный `~amd64` — с одним предложением про различие.
+- Новый короткий блок после шага 4: live-предупреждение (HEAD `master`,
+  локальный Manifest, фиксация коммита через `EGIT_COMMIT`); master-vs-
+  default-ветка помечается известным вопросом packaging.
+- Цепочки команд шагов 1–4 не переписываются — они уже верны.
+- Packaging-файлы не меняются (правка ebuild/KEYWORDS/`EGIT_BRANCH` —
+  отдельные changes).
 
 ## Capabilities
 
+### New Capabilities
+
+(нет)
+
 ### Modified Capabilities
 
-(нет) — README — документация установки, а не спецификация требований; поведение
-инструмента не меняется → `skip_specs: true`.
+(нет — README документация установки, поведение инструмента не меняется,
+`skip_specs: true`)
 
 ## Impact
 
-- **Docs**: `README.md:8-30` (секция «Установка» + новые примечания).
-- **Код/упаковка**: без изменений; `packaging/app-portage/emerge-ai/emerge-ai-0.1.0.ebuild`
-  остаётся единственным ebuild.
-- **Зависимости**: независимо; текст примечания про live-ветку согласуется с
-  `overlay-unit-tests` (тот же слой — только документация).
+- **Docs**: `README.md` шаг 3 (блок `package.accept_keywords`) + новый абзац
+  live-предупреждения после шага 4.
+- **Код/упаковка**: без изменений; `emerge-ai-9999.ebuild` остаётся единственным
+  ebuild.
+- **Риски**: нулевые для кода; текстовый дрейф README при будущем изменении
+  packaging — риск тот же, что и раньше.
