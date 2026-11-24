@@ -20,15 +20,26 @@ Ebuild лежит в `packaging/app-portage/emerge-ai/` — live-версия (`
 2. Сгенерировать Manifest (портage маскирует пакеты локального репозитория
    без него): `ebuild <overlay>/app-portage/emerge-ai/emerge-ai-9999.ebuild manifest`
 
-3. Разрешить live-версию (в ebuild нет KEYWORDS):
+3. Разрешить live-версию (в ebuild нет KEYWORDS). Широкая маска `**`
+   принимает пакет на всех архитектурах — осознанный выбор для live git-r3;
+   для одной архитектуры достаточно явного `~amd64`:
 
    ```
    echo "app-portage/emerge-ai **" | sudo tee /etc/portage/package.accept_keywords/emerge-ai
+   # или только для своей архитектуры: echo "app-portage/emerge-ai ~amd64" | sudo tee ...
    ```
 
 4. Установить: `sudo emerge -1av app-portage/emerge-ai`
    (рантайм-зависимости `sys-apps/portage` и `sys-apps/util-linux` подтянутся
    автоматически; `sys-fs/btrfs-progs`/`app-portage/genlop` — опциональны).
+
+   Live-предупреждение: ставится HEAD ветки `master`, а не зафиксированный
+   релиз; Manifest локального репозитория генерируется на вашей машине
+   (`ebuild manifest`). Для воспроизводимости зафиксируйте коммит —
+   `EGIT_COMMIT="<hash>"` в копии ebuild (или патчем оверлея). Известный
+   вопрос packaging: `EGIT_BRANCH="master"` должен совпадать с default-веткой
+   upstream (в этом репозитории — `master`; при переносе на `main` правится
+   ebuild).
 
 После установки:
 
