@@ -95,7 +95,10 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
   "model": "qwen3.8-flash-next-unsloth-ud-q5_k_xl",
   "api_key": null,
   "language": "auto",
-  "web_access": true,
+  "show_digest": true,
+  "etc_update_after_build": true,
+  "changelog_digest": true,
+  "agent": {"web_access": true},
   "llm_colors": {"content": "cyan", "reasoning": "dim", "question": "yellow"}
 }
 ```
@@ -104,16 +107,23 @@ emerge-ai --version     # версия emerge-ai рядом с версией Po
 - `model` — имя модели у провайдера.
 - `language` — `auto` (из `LANG`/`LC_*`) либо явно (`russian`, `english`, ...);
   действует и на обоснования LLM-сверки конфиг-файлов (JSON-ключи решения не переводятся).
-- `web_access` — разрешён ли агенту веб-поиск при диагностике (по умолч. вкл).
+- `agent.web_access` — разрешён ли агенту веб-поиск при диагностике (по умолч. вкл).
   При etc-конфигуровке документация подтягивается реально: для путей
   `package.use*/<cat>/<pn>` — страница `packages.gentoo.org`, для прочих файлов —
   поиск по `wiki.gentoo.org`; недоступная сеть = пустой контекст с предупреждением,
   решение LLM всё равно выдаётся.
+- `show_digest` — печатать дайджест после успешного мерджа (default true).
+- `etc_update_after_build` — разбирать защищённые конфиг-файлы через LLM (default true).
+- `changelog_digest` — сокращать changelog-дайджест до «самого важного» через LLM
+  (default true; без `endpoint` — raw-лист).
 - `llm_colors` — цвета блоков LLM-вывода (см. «Цвет вывода»); допустимы имена
   16 базовых цветов плюс `dim`/`bold`, а также `off`/`null` (выключить);
   невалидное имя — предупреждение и дефолт этого поля.
 
-Неизвестные ключи игнорируются с предупреждением.
+Неизвестные ключи игнорируются с предупреждением. Старые имена читаются как
+алиасы с предупреждением `deprecated`: `post_run_digest` → `show_digest`,
+`etc_update_llm` → `etc_update_after_build`, плоский `web_access` →
+`agent.web_access`; при конфликте побеждает каноническое имя.
 
 ## Цвет вывода
 
@@ -177,7 +187,7 @@ TTY на stdin. Во всех остальных режимах инструме
 ## Дайджесты
 
 - После успешного мерджа в stderr печатается дайджест запуска (собранные пакеты +
-  действия агента). Опция конфига: `post_run_digest` (default true).
+  действия агента). Опция конфига: `show_digest` (default true).
 - `emerge-ai --changelog` — дайджест изменений: локальные новости, GLESA-индекс,
   GitHub releases (`gh_repos`), shallow-клоны (`git_urls`, кэш `/var/cache/emerge-ai/git`);
   при наличии `endpoint` список сокращает LLM до «самого важного», без него — raw-лист.

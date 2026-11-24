@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from emerge_ai.config import Config, ConfigError, load_config, require_endpoint
@@ -8,6 +10,62 @@ def test_defaults():
     assert not hasattr(cfg, "reasoning_show")
     assert cfg.language == "auto"
     assert cfg.web_access is True
+    assert cfg.show_digest is True and cfg.etc_update_after_build is True
+    assert cfg.changelog_digest is True
+
+
+def test_canonical_keys_apply_without_warnings(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({
+        "show_digest": False, "etc_update_after_build": False,
+        "changelog_digest": False, "agent": {"web_access": False},
+    }))
+    p.chmod(0o600)  # avoid the loose-mode warning, err must be pristine
+    cfg = load_config(p)
+    assert cfg.show_digest is False and cfg.etc_update_after_build is False
+    assert cfg.changelog_digest is False and cfg.web_access is False
+    err = capsys.readouterr().err
+    assert err == ""  # spec-shaped config: no deprecation, no unknown-key noise
+
+
+@pytest.mark.parametrize("old,new", [
+    ("post_run_digest", "show_digest"),
+    ("etc_update_llm", "etc_update_after_build"),
+])
+def test_legacy_aliases_warn_and_map(tmp_path, capsys, old, new):
+    p = tmp_path / "cfg.json"
+    p.write_text(f'{{"{old}": false}}')
+    cfg = load_config(p)
+    assert getattr(cfg, new) is False
+    err = capsys.readouterr().err
+    assert "deprecated" in err and new in err
+
+
+def test_flat_web_access_alias(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"web_access": false}')
+    cfg = load_config(p)
+    assert cfg.web_access is False
+    err = capsys.readouterr().err
+    assert "deprecated" in err and "agent.web_access" in err
+
+
+def test_canonical_wins_over_alias(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"etc_update_after_build": false, "etc_update_llm": true}')
+    cfg = load_config(p)
+    assert cfg.etc_update_after_build is False
+    err = capsys.readouterr().err
+    assert "ignored" in err and "etc_update_llm" in err
+
+
+def test_agent_section_must_be_object(tmp_path, capsys):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"agent": 5}')
+    cfg = load_config(p)
+    assert cfg.web_access is True  # defaults kept
+    err = capsys.readouterr().err
+    assert "must be a JSON object" in err
 
 
 def test_removed_reasoning_show_key_warns_with_pointer(tmp_path, capsys):

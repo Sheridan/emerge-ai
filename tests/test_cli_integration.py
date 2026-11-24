@@ -293,7 +293,7 @@ def test_agent_proposal_tty_gets_two_colors(emerge_stub, ok_compat, monkeypatch,
 def test_post_run_digest_on_success(emerge_stub, ok_compat, tmp_path, capsys):
     binary, calls = emerge_stub
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"post_run_digest": true}')
+    cfg.write_text('{"show_digest": true}')
     rc = cli.main(["app-misc/foo"], str(binary), config_path=str(cfg),
                   runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
     assert rc == 0
@@ -305,7 +305,7 @@ def test_post_run_digest_on_success(emerge_stub, ok_compat, tmp_path, capsys):
 def test_post_run_digest_off(emerge_stub, ok_compat, tmp_path, capsys):
     binary, calls = emerge_stub
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"post_run_digest": false}')
+    cfg.write_text('{"show_digest": false}')
     rc = cli.main(["app-misc/foo"], str(binary), config_path=str(cfg),
                   runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
     assert rc == 0

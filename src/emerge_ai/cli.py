@@ -192,8 +192,8 @@ def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None
             print(etcupdate.show_diff(newp, stream=sys.stderr), file=sys.stderr)
         except OSError as exc:
             print(ui.warn(f"no diff for {newp}: {exc}"), file=sys.stderr)
-    if not llm or not cfg.etc_update_llm:
-        print(ui.info("etc_update_llm off or raw passthrough — showing diffs only, no actions"),
+    if not llm or not cfg.etc_update_after_build:
+        print(ui.info("etc_update_after_build off or raw passthrough — showing diffs only, no actions"),
               file=sys.stderr)
         return
     if client_factory is None:
@@ -267,7 +267,7 @@ def _post_run_digest(run, output, config_path, runs_dir) -> None:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
         cfg = Config()
-    if cfg.post_run_digest:
+    if cfg.show_digest:
         print(digest.post_run_digest(run, output), file=sys.stderr)
 
 

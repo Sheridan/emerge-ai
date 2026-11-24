@@ -121,7 +121,8 @@ def _cfg_dir(tmp_path, llm_flag=True, web_flag=False, language=None):
     (etc / "sshd_config").write_text("Port 2222\nPermitRootLogin yes\n")
     (etc / "._cfg0000_sshd_config").write_text("Port 22\nKexAlgorithms x\n")
     cfg = tmp_path / "cfg.json"
-    data = {"endpoint": "http://x/v1", "etc_update_llm": llm_flag, "web_access": web_flag}
+    data = {"endpoint": "http://x/v1", "etc_update_after_build": llm_flag,
+            "agent": {"web_access": web_flag}}
     if language:
         data["language"] = language
     cfg.write_text(json.dumps(data))

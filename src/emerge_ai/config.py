@@ -18,12 +18,20 @@ DEFAULTS = {
     "api_key": None,
     "language": "auto",
     "web_access": True,
-    "etc_update_llm": True,
-    "post_run_digest": True,
+    "show_digest": True,
+    "etc_update_after_build": True,
+    "changelog_digest": True,
     "gh_repos": [],
     "git_urls": [],
     "news_dir": "/var/lib/eselect-news/news",
     "llm_colors": dict(ui.DEFAULT_LLM_COLORS),
+}
+
+# Old file-level key names -> canonical keys (spec: config-prompts). Aliases are
+# readable with a deprecation warning; the canonical key wins on conflict.
+_ALIASES = {
+    "post_run_digest": "show_digest",
+    "etc_update_llm": "etc_update_after_build",
 }
 
 # Keys accepted in old configs, now gone: key -> where it went.
@@ -43,8 +51,9 @@ class Config:
     api_key: str | None = None
     language: str = "auto"
     web_access: bool = True
-    etc_update_llm: bool = True
-    post_run_digest: bool = True
+    show_digest: bool = True
+    etc_update_after_build: bool = True
+    changelog_digest: bool = True
     gh_repos: list = field(default_factory=list)
     git_urls: list = field(default_factory=list)
     news_dir: str = "/var/lib/eselect-news/news"
@@ -56,7 +65,32 @@ class Config:
         if warn is None:
             def warn(msg: str) -> None:
                 print(msg, file=sys.stderr)
-        unknown = set(data) - set(DEFAULTS) - set(_REMOVED_KEYS)
+        data = dict(data)
+        # canonical web_access lives under the nested "agent" section; the flat
+        # key stays a readable alias, the dataclass attribute stays flat (D1)
+        if "agent" in data:
+            agent = data.pop("agent")
+            if isinstance(agent, dict):
+                for sub in sorted(set(agent) - {"web_access"}):
+                    warn(f"emerge-ai: config: ignoring unknown key 'agent.{sub}'")
+                if "web_access" in agent:
+                    if "web_access" in data:
+                        warn("emerge-ai: config: flat 'web_access' ignored: 'agent.web_access' wins")
+                    data["web_access"] = agent["web_access"]
+            else:
+                warn("emerge-ai: config: 'agent' must be a JSON object; ignoring")
+        elif "web_access" in data:
+            warn("emerge-ai: config: key 'web_access' is deprecated, use 'agent.web_access'")
+        for old, new in sorted(_ALIASES.items()):
+            if old not in data:
+                continue
+            value = data.pop(old)
+            if new in data:
+                warn(f"emerge-ai: config: key {old!r} is deprecated and ignored, {new!r} is set")
+            else:
+                warn(f"emerge-ai: config: key {old!r} is deprecated, use {new!r}")
+                data[new] = value
+        unknown = set(data) - set(DEFAULTS) - set(_REMOVED_KEYS) - set(_ALIASES)
         for key in sorted(unknown):
             warn(f"emerge-ai: config: ignoring unknown key {key!r}")
         for key in sorted(_REMOVED_KEYS):

@@ -2,5 +2,11 @@
   "endpoint": "",
   "model": "",
   "api_key": "",
-  "language": "auto"
+  "language": "auto",
+  "show_digest": true,
+  "etc_update_after_build": true,
+  "changelog_digest": true,
+  "agent": {
+    "web_access": true
+  }
 }

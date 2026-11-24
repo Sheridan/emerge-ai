@@ -153,7 +153,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
 - Для Gentoo «только systemd» выглядит ошибкой спека (OpenRC — основной init).
   Скорее править спек на «init-aware», чем код на systemd-only; но полумеры надо закрыть.
 
-### M10. Схема конфига расходится со спеком; опции changelog нет вовсе
+### M10. Схема конфига расходится со спеком; опции changelog нет вовсе — закрыто (change `align-config-schema`)
 - Спек `config-prompts` задаёт ключи `show_digest`, `etc_update_after_build`,
   `changelog_digest`, `agent.web_access`; в `DEFAULTS` (config.py:15-26) — 
   `post_run_digest`, `etc_update_llm`, плоский `web_access`, и никакого changelog-ключа.

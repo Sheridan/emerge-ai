@@ -39,7 +39,7 @@ def e2e_env(tmp_path, emerge_stub, ok_compat, monkeypatch):
     cfg.write_text(json.dumps({
         "endpoint": os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
         "model": os.environ.get("EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
-        "post_run_digest": False,
+        "show_digest": False,
     }))
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
     return binary, calls, cfg, tmp_path
