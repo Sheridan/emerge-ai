@@ -108,7 +108,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   задокументировать; лучше — писать stderr-строки в `sys.stderr` (детект по префиксам
   тяжело, но можно не мержить, а читать два потока двумя потоками чтения).
 
-### M3. `text=True` без `errors="replace"` при захвате вывода emerge
+### M3. `text=True` без `errors="replace"` при захвате вывода emerge — закрыто (change `lenient-emerge-decoding`)
 - `runner.py:36-46`: декодирование строгое; не-UTF-8 байты в выводе emerge (редко, но
   бывает в ebuild-сообщениях/именах) уронят `UnicodeDecodeError` посреди зеркального
   вывода. Дешёвый фикс: `errors="replace"`.

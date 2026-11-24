@@ -27,17 +27,22 @@ def with_color_flag(emerge_args: list[str], stream=None) -> list[str]:
 def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) -> tuple[int, str]:
     """Run emerge (typically --pretend), mirroring output to stdout while
     buffering it for the enrichment hook. No TTY is attached. stdout stays
-    byte-identical passthrough (spec: console-output); the buffer is ANSI-stripped
-    because it feeds parsing and the LLM (design D5)."""
+    byte-identical passthrough for fully decodable output (spec:
+    console-output); the buffer is ANSI-stripped because it feeds parsing and
+    the LLM (design D5). Undecodable bytes are replaced, never fatal, and the
+    text never carries surrogates (spec: console-output, replace-not-crash)."""
     proc = subprocess.Popen(
         [emerge_binary, *with_color_flag(emerge_args)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
     )
+    # Decode per line against the console encoding with "replace": one stray
+    # byte must not abort the run before proc.wait() and the incident report.
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
     lines: list[str] = []
     assert proc.stdout is not None
-    for line in proc.stdout:
+    for raw in proc.stdout:  # binary mode: bytes lines, we decode explicitly
+        line = raw.decode(encoding, errors="replace")
         sys.stdout.write(line)
         sys.stdout.flush()
         lines.append(ui.strip_ansi(line))

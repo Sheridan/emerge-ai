@@ -30,6 +30,9 @@ sudo emerge-ai -a sys-apps/baselayout
 - `emerge-ai <атом> -pv` с гарантированным конфликтом (slot-conflict/masked): rc≠0 и stderr содержит
   «emerge-ai: incident -> consulting agent» + предложение агента. (регрессия: до фикса план-фол
   сохранялся молча, `_maybe_agent` исключал класс plan-failed)
+- (факультативно, lenient-emerge-decoding) `LC_ALL=C` и пакет/файл с не-UTF-8 именем в выводе
+  emerge: emerge-ai НЕ падает с UnicodeDecodeError — недекодируемые байты печатаются как
+  `�` (символ замены) и прогон доходит до штатного rc.
 
 ## Интерактивные вопросы оператора (interactive-incident-dialogue, выполняет пользователь)
 
