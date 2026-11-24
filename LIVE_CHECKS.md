@@ -98,3 +98,18 @@ cd / && emerge-ai --version
 cd / && python3.13 -c "from emerge_ai.prompts import load_rules; print(len(load_rules()))"
 #   → число > 0 (2402 на текущих правилах)
 ```
+
+## План-фаза: LLM-сводка (llm-plan-enrichment, выполняет пользователь)
+
+```bash
+# 1) с активным endpoint в /etc/portage/emerge-ai.json
+emerge-ai -p app-editors/vim
+#   → после строк «emerge-ai plan digest:» идёт блок «llm summary:» (2–5 строк,
+#     plain text, раскрашен как LLM-вывод); числа дайджеста не изменились
+# 2) без endpoint (временно endpoint="")
+emerge-ai -p app-editors/vim
+#   → только детерминированный дайджест, «llm summary:» нет, выход 0
+# 3) endpoint указывает на нездоровый сервер (например, порт закрыт)
+emerge-ai -p app-editors/vim
+#   → как в (2): сводка молча отсутствует, план-фаза не сломана, выход 0
+```

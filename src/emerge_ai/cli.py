@@ -385,7 +385,14 @@ def main(
         plan = plan_fn(emerge_args, tier_service)
         run.plan = [asdict(e) for e in plan.entries]
         state.save_run(run, runs_dir)
-        print(plan_digest(plan, stream=sys.stdout))
+        summarize = None
+        if cfg.endpoint:  # LLM summary atop the deterministic core (spec: run-reporting)
+            _llm = LLMClient(cfg, show_reasoning=verbose)
+
+            def summarize(messages, _c=_llm):
+                return _c.chat(messages)
+
+        print(plan_digest(plan, stream=sys.stdout, summarize=summarize))
         if is_mass_update(emerge_args, plan):
             for line in doctor_report(plan, stream=sys.stderr):
                 print(line, file=sys.stderr)

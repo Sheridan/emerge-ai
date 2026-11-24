@@ -488,3 +488,48 @@ def test_e2e_pretend_neither_asks_nor_reads_stdin(emerge_stub, ok_compat, monkey
     err = capsys.readouterr().err
     assert "ASSUMPTIONS: openrc, no rebuild" in err
     assert "choose, [c] own text" not in err
+
+
+def test_plan_phase_llm_summary_with_endpoint(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    from emerge_ai.plan import Plan, PlanEntry
+
+    binary, calls = emerge_stub
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://localhost:1/v1", "model": "m"}')
+    seen = []
+
+    class FakeClient:
+        def __init__(self, cfg, show_reasoning=False):
+            pass
+
+        def chat(self, messages):
+            seen.append(messages)
+            return type("R", (), {"content": "watch the tier-1 rebuild"})()
+
+    monkeypatch.setattr(cli, "LLMClient", FakeClient)
+    plan = Plan(entries=[PlanEntry("app-misc/foo-1.0", 1, "hint")])
+    rc = cli.main(["-p", "app-misc/foo"], str(binary), config_path=str(cfg),
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: plan)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "llm summary:" in out and "watch the tier-1 rebuild" in out
+    assert len(seen) == 1 and "plan briefer" in seen[0][0]["content"]
+
+
+def test_plan_phase_no_llm_summary_without_endpoint(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    from emerge_ai.plan import Plan, PlanEntry
+
+    binary, calls = emerge_stub
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text("{}")
+
+    def no_client(cfg, show_reasoning=False):
+        raise AssertionError("LLMClient must not be built without endpoint")
+
+    monkeypatch.setattr(cli, "LLMClient", no_client)
+    plan = Plan(entries=[PlanEntry("app-misc/foo-1.0", 1, "hint")])
+    rc = cli.main(["-p", "app-misc/foo"], str(binary), config_path=str(cfg),
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: plan)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "plan digest:" in out and "llm summary:" not in out

@@ -113,7 +113,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   бывает в ebuild-сообщениях/именах) уронят `UnicodeDecodeError` посреди зеркального
   вывода. Дешёвый фикс: `errors="replace"`.
 
-### M4. «LLM-обогащение плана» на самом деле без LLM
+### M4. «LLM-обогащение плана» на самом деле без LLM — закрыто (change `llm-plan-enrichment`)
 - README:66-67 и спек run-reporting («Enrich для pretend/ask»: «добавить обогащение от
   LLM») обещают LLM-обогащение; реализация — детерминированный `plan_digest`
   (tier-распределение + genlop-оценки, `enrich.py:52+`). LLM в фазе плана не участвует.
