@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from dataclasses import asdict
 
-from emerge_ai import __version__, hooks, portage_compat, state
+from emerge_ai import __version__, portage_compat, state
 from emerge_ai.compat import check_version_compat
 from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
@@ -355,8 +355,6 @@ def main(
                 print(line, file=sys.stderr)
     except Exception as exc:  # enrichment must never break emerge's own flow
         print(ui.warn(f"plan enrichment skipped: {exc}"), file=sys.stderr)
-
-    hooks.run_hook(output, mode)
 
     if ask:
         if mode.noninteractive:

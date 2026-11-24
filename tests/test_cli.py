@@ -2,7 +2,7 @@ import builtins
 
 import pytest
 
-from emerge_ai import cli, hooks
+from emerge_ai import cli
 
 
 @pytest.fixture
@@ -32,19 +32,13 @@ def test_version_gate_blocks_any_emerge_call(emerge_stub, monkeypatch, capsys, t
     assert "3.1.0" in err and "emerge-ai" in err
 
 
-def test_pretend_prints_verbatim_runs_once_and_fires_hook(emerge_stub, capsys, ok_compat, tmp_path):
+def test_pretend_prints_verbatim_runs_once(emerge_stub, capsys, ok_compat, tmp_path):
     binary, calls = emerge_stub
-    seen = []
-    hooks.set_hook(lambda out, mode: seen.append(out))
-    try:
-        rc = cli.main(["-p", "sys-apps/portage"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
-    finally:
-        hooks.set_hook(None)
+    rc = cli.main(["-p", "sys-apps/portage"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
     out = capsys.readouterr().out
     assert rc == 0
     assert "STUB-OUT line1" in out
     assert calls() == [["-p", "sys-apps/portage"]]
-    assert seen and "STUB-OUT line1" in seen[0]
 
 
 def test_ask_denied_never_merges(emerge_stub, ok_compat, monkeypatch, capsys, tmp_path):
