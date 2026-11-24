@@ -136,7 +136,8 @@ emerge-ai --noninteractive -a =app-misc/small-1.0
 emerge-ai app-misc/small        # обычный запуск, подтвердить [Yes/No] у emerge
 #   → в stderr: «emerge-ai plan digest:», info о точке («rest-tier ...» или пусто),
 #     в stdout — только дословный вывод emerge (в т.ч. штатный вопрос [Yes/No])
-#   → emerge резолвится дважды: видно по «These are the packages...» дважды
+#   → «These are the packages...» ровно один раз: план строится из того же
+#     pretend-вывода (avoid-double-resolve-in-plan)
 # 2) tier<=4 без флагов: точка создаётся ДО подтверждения
 sudo emerge-ai --ask sys-apps/critical   # для сравнения с -a
 sudo emerge-ai sys-apps/critical         # без -a: сначала строка снапшота/архива,
@@ -144,3 +145,20 @@ sudo emerge-ai sys-apps/critical         # без -a: сначала строк�
 # 3) мир при недоступном плане (например, битый атом в команде):
 emerge-ai --noninteractive =nonexistent/nope
 #   → rc != 0, «plan-failed» в отчёте, merge не запускался
+
+## Гейт автономности (wire-autonomy-gate)
+
+```bash
+# 1) rest-tier в неинтерактиве — пуск + строка решения в аудите
+emerge-ai --noninteractive app-misc/small
+sudo tail -1 /var/log/emerge-ai/decisions.log   # decision=apply, tiers=[5]
+
+# 2) tier 1–4 в неинтерактиве — отказ ДО мутаций
+sudo emerge-ai --noninteractive sys-apps/critical
+#   → rc 7, «autonomy gate: merge blocked», emerge не стартовал,
+#     созданная точка вычищена, decision=denied в аудите
+
+# 3) тот же tier 1 с флагом ответственности — пуск с обоснованием
+sudo emerge-ai --noninteractive --i-understand-the-risks sys-apps/critical
+# 4) интерактив: вердикт ASK печатается, поведение как раньше (вопрос emerge)
+```

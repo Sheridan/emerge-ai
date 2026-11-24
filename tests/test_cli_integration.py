@@ -87,7 +87,7 @@ def test_capture_adds_color_flag_on_tty_stdout(emerge_stub, ok_compat, monkeypat
 
     monkeypatch.setattr(sys, "stdout", TTY())
     rc = cli.main(
-        ["--noninteractive", "app-misc/foo"],
+        ["--noninteractive", "--i-understand-the-risks", "app-misc/foo"],
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         plan_fn=lambda a, s: None,
@@ -104,7 +104,7 @@ def test_resume_reuses_incomplete_run_context(emerge_stub, ok_compat, tmp_path, 
     state.save_run(run, runs_dir=tmp_path)
 
     rc = cli.main(
-        ["--noninteractive", "--resume"],
+        ["--noninteractive", "--i-understand-the-risks", "--resume"],
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         plan_fn=lambda a, s: None,
@@ -268,7 +268,7 @@ def test_incident_consults_agent_and_prints_proposal(emerge_stub, ok_compat, mon
         return "PROPOSAL: add sandbox manifest"
 
     rc = cli.main(
-        ["--noninteractive", "-a", "app-misc/foo"],
+        ["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         config_path=str(cfg),
@@ -298,7 +298,7 @@ def test_agent_proposal_tty_gets_two_colors(emerge_stub, ok_compat, monkeypatch,
     tty = TTY()
     monkeypatch.setattr(cli.sys, "stderr", tty)
     rc = cli.main(
-        ["--noninteractive", "-a", "app-misc/foo"],
+        ["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         config_path=str(cfg),
@@ -374,7 +374,7 @@ def test_agent_error_red_on_tty_stderr(emerge_stub, ok_compat, monkeypatch, tmp_
     tty = TTY()
     monkeypatch.setattr(cli.sys, "stderr", tty)
     rc = cli.main(
-        ["--noninteractive", "-a", "app-misc/foo"],
+        ["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         config_path=str(cfg),
@@ -572,7 +572,7 @@ def test_post_run_changelog_off_by_default(emerge_stub, ok_compat, monkeypatch, 
         raise AssertionError("collect_digest must not run when changelog_digest is off")
 
     monkeypatch.setattr(cli.changelog, "collect_digest", no_call)
-    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 0
     assert "changelog digest" not in capsys.readouterr().err
@@ -593,7 +593,7 @@ def test_post_run_changelog_on_saves_report(emerge_stub, ok_compat, monkeypatch,
             return type("R", (), {"content": "- OpenSSL upgrade needed"})()
 
     monkeypatch.setattr(cli, "LLMClient", FakeClient)
-    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(runs),
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(runs),
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 0
     err = capsys.readouterr().err
@@ -611,7 +611,7 @@ def test_post_run_changelog_without_endpoint_is_raw(emerge_stub, ok_compat, monk
         raise AssertionError("no LLMClient without endpoint")
 
     monkeypatch.setattr(cli, "LLMClient", no_client)
-    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 0
     err = capsys.readouterr().err
@@ -626,7 +626,7 @@ def test_post_run_changelog_failure_keeps_rc(emerge_stub, ok_compat, monkeypatch
         raise RuntimeError("source exploded")
 
     monkeypatch.setattr(cli.changelog, "collect_digest", boom)
-    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 0
     assert "changelog digest skipped: source exploded" in capsys.readouterr().err
@@ -642,7 +642,7 @@ def test_post_run_changelog_not_called_on_failure(emerge_stub, ok_compat, monkey
         raise AssertionError("no changelog digest for a failed run")
 
     monkeypatch.setattr(cli.changelog, "collect_digest", no_call)
-    rc = cli.main(["--noninteractive", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"], str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 1
 
@@ -690,7 +690,7 @@ def test_plain_protect_before_merge_tier1(emerge_stub, ok_compat, monkeypatch, t
     monkeypatch.setattr(builtins, "input", lambda prompt="": pytest.fail("stdin read"))
     order = []
     rc = cli.main(
-        ["--noninteractive", "sys-libs/glibc"],
+        ["--noninteractive", "--i-understand-the-risks", "sys-libs/glibc"],
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-libs/glibc-2.42", 1, "hint")]),
@@ -701,6 +701,31 @@ def test_plain_protect_before_merge_tier1(emerge_stub, ok_compat, monkeypatch, t
     assert rc == 0
     assert order == ["protect"]  # point created, merge went ahead, cleanup after success
     assert calls() == [["sys-libs/glibc", "--pretend"], ["sys-libs/glibc"]]
+
+
+def test_noninteractive_tier1_blocked_before_mutations(emerge_stub, ok_compat, tmp_path):
+    """wire-autonomy-gate: plain неинтерактив tier 1 — остановка до мутаций, rc 7,
+    точка защищённости вычищена, решение в аудите."""
+    binary, calls = emerge_stub
+    audit = tmp_path / "decisions.log"
+    order = []
+    rc = cli.main(
+        ["--noninteractive", "sys-libs/glibc"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        audit_path=str(audit),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-libs/glibc-2.42", 1, "hint")]),
+        protect_fn=lambda run, plan: (order.append("protect"),
+                                      Protection(run_id=run.run_id, archive_dir="/tmp/a"))[1],
+        cleanup_fn=lambda prot: (order.append("cleanup"), ["dropped"])[1],
+    )
+    assert rc == 7  # не код emerge — отдельный код отказа гейта
+    assert calls() == [["sys-libs/glibc", "--pretend"]]  # merge не стартовал
+    assert order == ["protect", "cleanup"]  # created point dropped on refusal
+    import json
+
+    line = json.loads(audit.read_text().splitlines()[-1])
+    assert line["decision"] == "denied" and line["tiers"] == [1]
 
 
 def test_plain_rest_tier_skips_protect(emerge_stub, ok_compat, tmp_path):

@@ -4,6 +4,7 @@ import json
 import pytest
 
 from emerge_ai import cli
+from emerge_ai.flags import Mode
 
 
 @pytest.fixture
@@ -160,7 +161,8 @@ def test_ask_noninteractive_proceeds_without_prompt(emerge_stub, ok_compat, monk
         raise AssertionError("must not prompt in --noninteractive")
 
     monkeypatch.setattr(builtins, "input", _boom)
-    rc = cli.main(["--noninteractive", "-a", "sys-apps/foo"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "sys-apps/foo"],
+           emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
     assert rc == 0
     assert calls()[-1] == ["sys-apps/foo"]
 
@@ -448,7 +450,7 @@ def test_plain_world_doctor_stderr_stdout_clean(emerge_stub, ok_compat, tmp_path
 
     binary, calls = emerge_stub
     rc = cli.main(
-        ["--noninteractive", "-uDN", "@world"],
+        ["--noninteractive", "--i-understand-the-risks", "-uDN", "@world"],
         emerge_binary=binary,
         runs_dir=str(tmp_path),
         plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-apps/baselayout-2.17", 1, "hint")]),
@@ -486,8 +488,8 @@ def test_plan_reuses_pretend_output_no_resolver(tmp_path, ok_compat, capfd):
     )
     binary = _pretend_stub(tmp_path, pretend)
     calls = []
-    rc = cli.main(["--noninteractive", "-uDN", "@world"], emerge_binary=binary,
-                  runs_dir=str(tmp_path),
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-uDN", "@world"],
+                  emerge_binary=binary, runs_dir=str(tmp_path),
                   plan_fn=lambda a, s: calls.append(1) or None)
     assert rc == 0
     assert calls == []  # pretend output parsed; no second resolve
@@ -511,3 +513,50 @@ def test_plan_falls_back_to_resolver_on_quiet_output(tmp_path, ok_compat):
                   runs_dir=str(tmp_path), plan_fn=plan_fn)
     assert rc == 0
     assert seen == [["app-misc/foo"]]  # exactly one fallback resolve
+
+
+def _plan(tier):
+    from emerge_ai.plan import Plan, PlanEntry
+
+    return Plan(entries=[PlanEntry("app-misc/foo-1.0", tier, "hint")])
+
+
+def test_mutation_gate_rest_tier_audits_and_allows(tmp_path):
+    allowed, reason = cli._mutation_gate(
+        Mode(noninteractive=True), _plan(5), audit_path=tmp_path / "d.log"
+    )
+    assert allowed and "rest-tier merge" in reason
+    import json
+
+    line = json.loads((tmp_path / "d.log").read_text())
+    assert line["decision"] == "apply" and line["tiers"] == [5]
+
+
+def test_mutation_gate_tier2_denies_noninteractive(tmp_path):
+    allowed, reason = cli._mutation_gate(
+        Mode(noninteractive=True), _plan(2), audit_path=tmp_path / "d.log"
+    )
+    assert not allowed and "refusing auto-merge" in reason
+
+
+def test_mutation_gate_unwritable_audit_fails_closed(tmp_path):
+    allowed, reason = cli._mutation_gate(
+        Mode(noninteractive=True), _plan(5),
+        audit_path=tmp_path / "d.log", audit_fn=lambda e, p: False,
+    )
+    assert not allowed and "fail-closed" in reason
+
+
+def test_mutation_gate_unwritable_audit_warns_interactively(tmp_path, capfd):
+    # AUTO (responsibility) + неписьемый аудит: предупреждение, не запрет
+    allowed, _ = cli._mutation_gate(Mode(responsibility=True), _plan(1),
+                                    audit_fn=lambda e, p: False)
+    assert allowed
+    assert "audit could not be written" in capfd.readouterr().err
+
+
+def test_mutation_gate_no_plan_noninteractive_denied(tmp_path):
+    allowed, reason = cli._mutation_gate(
+        Mode(noninteractive=True), None, audit_path=tmp_path / "d.log"
+    )
+    assert not allowed and "refusing auto-merge" in reason

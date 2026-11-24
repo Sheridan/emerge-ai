@@ -63,8 +63,11 @@ def autonomy_decision(mode: dict, variant: Variant) -> tuple[str, str]:
             " to automate)"
         )
     if mode.get("noninteractive"):
-        if variant.tiers and max(variant.tiers) == 5 and variant.kind == "fix":
-            return AUTO, "--noninteractive: rest-tier auto-repair allowed"
+        if variant.tiers and max(variant.tiers) == 5 and variant.kind in ("fix", "merge"):
+            # "merge": the CLI's own mutation gate reuses this matrix (D1 of
+            # wire-autonomy-gate); rest-tier queues are as safe as rest-tier fixes
+            what = "merge" if variant.kind == "merge" else "auto-repair"
+            return AUTO, f"--noninteractive: rest-tier {what} allowed"
         return DENY, (
             f"--noninteractive: refusing auto-{variant.kind} at tiers {variant.tiers}; "
             "run interactively or pass "
@@ -73,15 +76,18 @@ def autonomy_decision(mode: dict, variant: Variant) -> tuple[str, str]:
     return ASK, "default mode: every mutation requires a human yes"
 
 
-def audit(entry: dict, path: str | Path = AUDIT_PATH) -> None:
+def audit(entry: dict, path: str | Path = AUDIT_PATH) -> bool:
+    """Append one decision line; True when the line definitely hit disk.
+    Callers may fail-close on False (the seam must never mutate unrecorded)."""
     entry = {"ts": time.time(), **entry}
     p = Path(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "a") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return True
     except OSError:
-        pass  # audit must never mask the gate decision
+        return False  # audit must never mask the gate decision itself
 
 
 def gate(

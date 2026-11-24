@@ -13,7 +13,7 @@ def _isolate_config(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _no_real_recovery(monkeypatch):
+def _no_real_recovery(monkeypatch, tmp_path):
     """The plan phase now protects every mutation path; unit tests must never
     reach the real /var/lib. Explicit protect_fn= arguments still win."""
     from emerge_ai import cli as cli_mod
@@ -23,6 +23,8 @@ def _no_real_recovery(monkeypatch):
         cli_mod, "_default_protect",
         lambda run, plan: Protection(run_id=run.run_id, notes=["stub: no recovery"]),
     )
+    # autonomy-gate audit lines must never touch /var/log during tests
+    monkeypatch.setattr(cli_mod.gate_mod, "AUDIT_PATH", str(tmp_path / "decisions.log"))
 
 
 def fake_ebuild(tmp_path, cpv="cat/pkg-1.0", desc="orig"):

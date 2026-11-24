@@ -16,7 +16,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
-from emerge_ai import changelog, digest, etcupdate, init_check
+from emerge_ai import changelog, digest, etcupdate, gate as gate_mod, init_check
 from emerge_ai.incident import build_incident
 from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan, build_plan_from_output
@@ -66,6 +66,44 @@ def _default_protect(run, plan) -> Protection:
     # D4 (plan-before-plain-merge): with plan=None the tiers are unknown and
     # the spec demands protection exactly then — protect unconditionally
     return rollback_mod.protect(run.run_id, plan, contents_fn=portage_compat.vdb_contents)
+
+
+def _mutation_gate(mode, plan, *, audit_path=gate_mod.AUDIT_PATH, audit_fn=gate_mod.audit):
+    """Autonomy-matrix verdict for the merge about to run (spec: agent-loop-
+    consent). AUTO/DENY decisions are audited; under --noninteractive an AUTO
+    without a written audit line is void (fail-closed). Interactive ASK needs
+    no extra consent: the operator's TTY invocation (plain runs) or the
+    explicit Proceed? (-a) already happened."""
+    mode_dict = asdict(mode)
+    tiers = tuple(sorted({e.tier for e in plan.entries})) if plan is not None else ()
+    variant = gate_mod.Variant(
+        key="merge",
+        title="merge queue" + (f" (tiers {tiers})" if tiers else " (tiers unknown)"),
+        risks=[f"tier {t} packages in queue" for t in tiers] or ["tiers unknown: queue not classifiable"],
+        kind="merge",
+        tiers=tiers,
+    )
+    verdict, reason = gate_mod.autonomy_decision(mode_dict, variant)
+    if verdict in (gate_mod.AUTO, gate_mod.DENY):
+        written = audit_fn(
+            {
+                "mode": mode_dict,
+                "variant": "merge",
+                "kind": "merge",
+                "tiers": list(tiers),
+                "decision": "apply" if verdict == gate_mod.AUTO else "denied",
+                "autonomy": verdict,
+                "reason": reason,
+            },
+            audit_path,
+        )
+        if not written:
+            if mode.noninteractive:
+                return False, reason + " (decision audit unwritable: fail-closed)"
+            print(ui.warn("decision audit could not be written"), file=sys.stderr)
+    if verdict == gate_mod.DENY:
+        return False, reason
+    return True, reason
 
 
 def _stdin_is_tty() -> bool:
@@ -319,6 +357,7 @@ def main(
     cleanup_fn=None,
     agent_fn=None,
     systemd_check=init_check.is_systemd,
+    audit_path: str | None = None,  # None -> gate.AUDIT_PATH at call time (test-injectable)
 ) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -468,23 +507,29 @@ def main(
             state.transition(run, state.DONE, runs_dir)
             return 5
 
-    if ask:
-        if mode.noninteractive:
-            if not mode.responsibility:
-                print(
-                    ui.info(
-                        "--noninteractive: proceeding (autonomy matrix; "
-                        "tier gate re-checked before mutations)"
-                    ),
-                    file=sys.stderr,
-                )
-        elif not confirm(ui.prompt("Proceed? [y/N] ")):
+    queue_tiers = sorted({e.tier for e in plan.entries}) if plan is not None else []
+    tiers_note = f" (queue tiers: {', '.join(map(str, queue_tiers))})" if queue_tiers else ""
+    if ask and not mode.noninteractive:
+        if not confirm(ui.prompt(f"Proceed?{tiers_note} [y/N] ")):
             print(ui.info("aborted by user."), file=sys.stderr)
             if prot.snapshot or prot.archive_dir:
                 for line in (cleanup_fn or rollback_mod.cleanup)(prot):
                     print(ui.ok(line), file=sys.stderr)  # D5: no merge -> no point
             state.transition(run, state.DONE, runs_dir)
             return 0
+
+    # autonomy gate (spec: agent-loop-consent): the matrix decides and audits
+    # every mutation merge; the printed line carries the actual verdict (D4)
+    allowed, gate_reason = _mutation_gate(mode, plan, audit_path=audit_path or gate_mod.AUDIT_PATH)
+    if allowed:
+        print(ui.info(f"autonomy gate: {gate_reason}"), file=sys.stderr)
+    else:
+        print(ui.err(f"autonomy gate: merge blocked — {gate_reason}"), file=sys.stderr)
+        if prot.snapshot or prot.archive_dir:
+            for line in (cleanup_fn or rollback_mod.cleanup)(prot):
+                print(ui.ok(line), file=sys.stderr)  # blocked before mutations
+        state.transition(run, state.DONE, runs_dir)
+        return 7
 
     merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
     state.transition(run, state.MERGE, runs_dir)
