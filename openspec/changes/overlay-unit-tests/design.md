@@ -3,10 +3,11 @@
 ## Context
 
 `overlay.py` целиком параметризован путями: `ensure_layout(repo_root, repos_conf_dir, ...)`,
-`load_registry(repo_root)`, `write_manifest(overlay_ebuild, skip=...)`,
-`add_package(cpv, ..., repo_root, repos_conf_dir, ebuild_cmd=None)`,
-`remove_package(cpv, repo_root, ...)`; module-level константа `REPOS_CONF` (`:13`) в
-теле функций не используется. Единственный тест слоя — `tests/test_overlay_live.py`
+`load_registry(repo_root)`, `write_manifest(dest_dir, names)`,
+`add_package(cpv, repo_root=..., source_dir=..., ebuild_cmd=None)`,
+`remove_package(cpv, repo_root=...)`; module-level константы `REPOS_CONF`/`OVERLAY_ROOT`
+(`:12-13`) используются только как значения по умолчанию — все тесты могут передавать
+`tmp_path` явно. Единственный тест слоя — `tests/test_overlay_live.py`
 с маркером `integration` (`pyproject.toml:25-26`, не запускается по умолчанию), который
 требует живого дерева Portage и реального `ebuild`. Ошибка в реестре или Manifest
 обнаруживается только на машине пользователя.
@@ -33,22 +34,30 @@ success-ветка `add_package` без живого ebuild (через `ebuild_
 **D2. Success-ветка `add_package` через `ebuild_cmd`-двойник.** Параметр `ebuild_cmd`
 позволяет подставить команду, которая «делает manifest» без Portage (как `fake_ebuild_cmd`
 в `tests/test_ladder.py`: скрипт, пишущий файл Manifest). Это даёт полный путь:
-копия ebuild + files/, запись в реестр, `repos.conf`. Отказная ветка: `ebuild_cmd=["false"]`
-→ `RuntimeError` и отсутствие записи в реестре (осиротевший ebuild — то, что guard
-в `add_package` обещает prevention-мандатом).
+копия ebuild + files/, запись в реестр. Отказная ветка: `ebuild_cmd=["false"]`
+→ `RuntimeError` и отсутствие записи в реестре. Фактическое поведение guard'а:
+реестр он защищает, но скопированный ebuild на диске остаётся (копия происходит до
+вызова `ebuild`) — тестируем как есть, с комментарием; это кандидат на отдельный
+change, а не обещание current-кода. При `ebuild_cmd=None` внешнего `ebuild` НИКАКОЙ
+не вызывается (никакого `EMERGE_AI_EBUILD` в коде нет) — Manifest считается локально
+через `write_manifest`; это и есть «fallback», он тестируется.
 
 **D3. Формат Manifest проверяется структурно, а не побайтово.** Портage-совместимость
-важна, но точный набор хеш-алгоритмов может меняться (`--force` + `_hashes`), поэтому
-assert'ы: наличие секций EBUILD/AUX, хотя бы один `SHA256`/`SHA512`, SIZE-поле, имя
-AUX-файла с относительным путём `files/...`. Альтернатива — фиксированный эталонный
+важна, но точный набор хеш-алгоритмов может меняться (`_digest_manifest_args` пишет
+MD5/SHA1/SHA256/SHA512/SIZE), поэтому assert'ы: наличие строк EBUILD и AUX, все четыре
+хеша и SIZE, относительный путь AUX-файла (когда `files/...` передан в `names`).
+Альтернатива — фиксированный эталонный
 файл: хрупко при смене EAPI/алгоритмов; отвергнута.
 
 ## Risks
 
 - [Тесты разойдутся с фактическим поведением (bug в коде закрепится как ожидание)] →
-  перед написанием каждая функция прочитана; подозрительные места (например, `skip`
-  для `files/` не пробрасывается из `add_package`) проверяются отдельным assert'ом и,
-  при расхождении с мандатом, фиксируются TODO со ссылкой на новый change, а не
-  закрепляются молча.
+  перед написанием каждая функция прочитана; три фактических странности фиксируются
+  assert'ами «как есть» с комментарием: (а) `add_package` кладёт `files/<pv>` в
+  `repo_root/cat/files/pv` — вне каталога пакета, поэтому в Manifest пакета они не
+  попадают; (б) при отказе `ebuild manifest` копия ebuild остаётся на диске (guard
+  гарантирует только чистоту реестра); (в) реестр плоский (`cpv → entry`), версии не
+  агрегируются. Каждое расхождение с ожиданиями — кандидат отдельного change, а не
+  «правильное» поведение по умолчанию.
 - [Дублирование `fake_ebuild_cmd` из test_ladder] → при втором потребителе fixture
   переносится в `tests/conftest.py` (задача в tasks).

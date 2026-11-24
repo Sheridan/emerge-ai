@@ -200,7 +200,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
 - Комбинация `-a -p` (H1) и `-av`-кластер с non-tty stdin покрыты только частично
   (кластер покрыт, комбо — нет).
 
-### L4. `overlay.py` имеет только live-интеграционные тесты
+### L4. `overlay.py` имеет только live-интеграционные тесты — закрыто (change `overlay-unit-tests`)
 - `test_overlay_live.py` помечен integration (нужен живой хост); в сборочной фазе ebuild
   (`-m "not integration"`) реестр оверлея не тестируется вовсе. Стоит unit-слой с
   tmp-корнем.

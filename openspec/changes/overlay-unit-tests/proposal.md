@@ -16,15 +16,20 @@
 ## What Changes
 
 - Новый файл `tests/test_overlay.py` — юнит-набор без root и без живого дерева:
-  - `repos_conf_entry` — формат секции (`[name]`, `location=`, `priority=`, `masters=`);
+  - `repos_conf_entry` — формат секции (`[name]`, `location =`, `priority =`,
+    `auto-sync = false`); строка `masters =` дописывается `ensure_layout` —
+    проверяется на файле `repos.conf`;
   - `ensure_layout` — каталоги созданы, entry в `repos.conf`, повтор идемпотентен;
-  - `write_manifest` — строки EBUILD и AUX (`files/...`), хеши MD5/SHA1/SHA256 или
-    SHA512 + SIZE; отсутствующий файл пропускается без падения;
-  - `load_registry` — пустой/отсутствующий файл → `{}`, после записи — корректная
-    структура (`cat/pn` → имя → `cpv`/`versions`/`overlay_ebuild`);
+  - `write_manifest` — строки EBUILD и AUX (для `files/...` из `names`), хеши
+    MD5/SHA1/SHA256/SHA512 + SIZE; отсутствующий файл и сам `Manifest`
+    пропускаются без падения;
+  - `load_registry` — пустой/отсутствующий файл → `{}`, после записи — плоская
+    структура `cpv → {cpv, source, reason, journal_id, ts}`;
   - `add_package` — success с фейковым `ebuild_cmd` (как `fake_ebuild_cmd` в
-    `test_ladder.py`), отказ `ebuild_cmd=["false"]` → `RuntimeError` без осиротевшей
-    записи в реестре, fallback `ebuild_cmd=None` на `EMERGE_AI_EBUILD`/`ebuild`;
+    `test_ladder.py`), отказ `ebuild_cmd=["false"]` → `RuntimeError` без записи
+    в реестре (копия ebuild на диске остаётся — фиксируем как есть), fallback
+    `ebuild_cmd=None` — локальная регенерация Manifest через `write_manifest`
+    (внешний `ebuild` не вызывается);
   - `remove_package` — `True` при удалении, `False` при отсутствии.
 - Существующие тесты не меняются; живой ebuild остаётся интеграционным маркером.
 

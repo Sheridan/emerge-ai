@@ -1,30 +1,9 @@
 import datetime
-import stat
-
-import pytest
 
 from emerge_ai import config_edit, ladder, overlay
+from conftest import fake_ebuild
 
 TODAY = datetime.date(2026, 3, 1)
-
-
-def fake_ebuild(tmp_path, cpv="cat/pkg-1.0", desc="orig"):
-    cat, pn, pv = overlay._split_cpv(cpv)
-    src = tmp_path / "tree" / cat / pn
-    src.mkdir(parents=True)
-    ebuild = src / f"{pn}-{pv}.ebuild"
-    ebuild.write_text(f'EAPI=8\nDESCRIPTION="{desc}"\nSLOT="0"\nKEYWORDS="~amd64"\nS=${{WORKDIR}}\n')
-    (src.parent / "files" / pv).mkdir(parents=True)
-    (src.parent / "files" / pv / "x.txt").write_text("data")
-    return src
-
-
-@pytest.fixture
-def fake_ebuild_cmd(tmp_path):
-    script = tmp_path / "fake-ebuild.sh"
-    script.write_text('#!/bin/sh\ntouch "$(dirname "$1")/Manifest"\nexit 0\n')
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    return [str(script)]
 
 
 def test_package_edit_has_audit_comment(tmp_path):
