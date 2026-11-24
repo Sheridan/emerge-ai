@@ -203,3 +203,51 @@ sudo emerge-ai --noninteractive sys-apps/critical
 # 5) без endpoint в конфиге петля не включается вовсе: после сбоя нет ни
 #    «consent gate», ни вопросов — только proposal/отчёт как раньше
 ```
+
+## Журнал решений (wire-journal-writer, выполняет пользователь)
+
+```bash
+# 1) успешное применение фикса (повтор emerge отработал rc=0) — ровно одна запись
+sudo tail -1 /var/log/emerge-ai/journal.jsonl
+#   → JSON со solution/actions, "verified_by": "retry-exit-0", run_id прогона;
+#     запись появляется и на rest-tier ветке, и на интерактивной
+
+# 2) неудачный повтор — записи в журнале нет (только верифицированные фиксы)
+
+# 3) дедуп прецедентов: повторить тот же сбой (отпечаток stderr+класса совпадает)
+#   → в запросе модели секция «SUCCESSFUL PRECEDENT ... reuse of a
+#     successful precedent»; в stderr-эхо промпта она видна при -v
+
+# 4) unwritable журнал (chmod 000 /var/log/emerge-ai/journal.jsonl):
+#   → «journal write failed: ... — run unaffected» в stderr, применение и
+#     повтор emerge не тронуты, rc не изменён
+```
+
+## Исчерпание лимита агентом (handle-agent-limit-exhaustion, выполняет пользователь)
+
+```bash
+# 1) интерактив, усечение по токенам (маленький max_tokens или очень длинный лог):
+sudo emerge-ai --ask category/pkg
+#   → вопрос через штатный канал опроса: «продолжить разбор / свернуть разбор /
+#     завершить»; «продолжить» — разбор с точки остановки (фрагмент помечен
+#     как незавершённый), увеличенный бюджет раундов; второй раз за разбор
+#     вопрос не задаётся никогда
+
+# 2) «свернуть разбор» → итог из накопленного; нераспознанный ответ / EOF / [q]
+#    трактуются как «завершить»: фрагмент с пометкой
+#    «[answer truncated at the token limit — unfinished fragment, not a
+#    final conclusion]» + детерминированные варианты
+
+# 3) неинтерактив:
+sudo emerge-ai --noninteractive --i-understand-the-risks category/pkg
+#   → вопросов нет; «agent limit exhausted (tokens|rounds): ...» в stderr;
+#     sudo tail -1 /var/log/emerge-ai/decisions.log → "kind": "agent-limit",
+#     "decision": "finish", reason, incident_class, run_id;
+#     rc = коду сбоя emerge (не изменён)
+
+# 4) усечённые по лимиту вызовы инструментов НЕ исполняются: в stderr-эхо нет
+#    ни одной команды из обрезанного tool-call
+
+# 5) прочий сбой агента (выключить endpoint) — как раньше: «agent unavailable»
+#    или «agent stopped: ...», строки «agent limit exhausted» нет
+```

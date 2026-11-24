@@ -90,15 +90,15 @@ M3  ──► M2 (сохранить errors="replace" в новых путях �
 
 ## Финальная приёмка (после 4.3)
 
-- [ ] `pytest -q -m "not integration"` — все зелёные; интеграционные — на живом Gentoo.
-- [ ] `openspec validate --all` — 0 ошибок; `changes/` пуст (все заархивированы).
-- [ ] README/промпты/LIVE_CHECKS соответствуют фактическому поведению
+- [x] `pytest -q -m "not integration"` — все зелёные; интеграционные — на живом Gentoo.
+- [x] `openspec validate --all` — 0 ошибок; `changes/` пуст (все заархивированы).
+- [x] README/промпты/LIVE_CHECKS соответствуют фактическому поведению
       (гейт, откат, `-a -p`, enrichment, systemd-only) — сверить по разделу
       «спеки/README врут» в REVIEW_NOTES.
 - [ ] Ручной сценарий LIVE_CHECKS целиком: обычный merge (снимок+doctor),
       `-a -p` (без мержа), неинтерактив tier 2 (остановка+аудит), `--rollback`,
       инцидент с применением фикса по согласию и записью в журнал.
-- [ ] Мусорные артефакты: `manifest` в git отсутствует, `hooks.py`/`run_emerge` удалены.
+- [x] Мусорные артефакты: `manifest` в git отсутствует, `hooks.py`/`run_emerge` удалены.
 
 ## Оценка
 
