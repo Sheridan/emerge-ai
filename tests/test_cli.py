@@ -461,3 +461,53 @@ def test_plain_world_doctor_stderr_stdout_clean(emerge_stub, ok_compat, tmp_path
     assert captured.err.count("STUB-OUT") == 1  # only the plan-run stdout mirrored here; merge's stays in stdout
     assert captured.err.index("STUB-OUT") < captured.err.index("emerge-ai plan digest:")  # order: emerge, then enrichment
     assert calls() == [["-uDN", "@world", "--pretend"], ["-uDN", "@world"]]
+
+
+def _pretend_stub(tmp_path, text):
+    import stat
+
+    path = tmp_path / "emerge-pretend"
+    path.write_text(
+        "#!/usr/bin/env python3\nimport sys\n"
+        "sys.stdout.write(%r)\nsys.exit(0)\n" % text
+    )
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    return str(path)
+
+
+def test_plan_reuses_pretend_output_no_resolver(tmp_path, ok_compat, capfd):
+    """avoid-double-resolve: план строится из перехваченного -p вывода, фолбэк-резолвер не зван."""
+    pretend = (
+        "These are the packages that would be merged, in order:\n\n"
+        "Calculating dependencies... done!\n"
+        "[ebuild   R    ] sys-libs/glibc-2.42::gentoo  USE=\"nls\" 0 KiB\n"
+        "[ebuild   U    ] [app-editors/vim-9.1:0::gentoo] USE=\"X\" 1 KiB\n\n"
+        "Total: 2 packages, in 1 segment\n"
+    )
+    binary = _pretend_stub(tmp_path, pretend)
+    calls = []
+    rc = cli.main(["--noninteractive", "-uDN", "@world"], emerge_binary=binary,
+                  runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: calls.append(1) or None)
+    assert rc == 0
+    assert calls == []  # pretend output parsed; no second resolve
+    err = capfd.readouterr().err
+    digest_line = next(l for l in err.splitlines() if "pkg(s)" in l)
+    assert "sys-libs/glibc-2.42" in digest_line and "app-editors/vim-9.1" in digest_line
+    assert "::" not in digest_line and "[" not in digest_line  # cleaned CPVs in digest
+
+
+def test_plan_falls_back_to_resolver_on_quiet_output(tmp_path, ok_compat):
+    binary = _pretend_stub(tmp_path, "app-misc/foo-1.0\n")  # emerge -qq style
+    seen = []
+
+    def plan_fn(args, svc):
+        seen.append(list(args))
+        from emerge_ai.plan import Plan, PlanEntry
+
+        return Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")])
+
+    rc = cli.main(["--noninteractive", "app-misc/foo"], emerge_binary=binary,
+                  runs_dir=str(tmp_path), plan_fn=plan_fn)
+    assert rc == 0
+    assert seen == [["app-misc/foo"]]  # exactly one fallback resolve

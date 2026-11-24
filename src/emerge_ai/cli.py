@@ -19,7 +19,7 @@ from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
 from emerge_ai import changelog, digest, etcupdate, init_check
 from emerge_ai.incident import build_incident
 from emerge_ai.llm import LLMClient, LLMError
-from emerge_ai.plan import build_plan
+from emerge_ai.plan import build_plan, build_plan_from_output
 from emerge_ai import rollback as rollback_mod
 from emerge_ai.rollback import Protection
 from emerge_ai.runner import confirm, drop_flags, flag_present, run_emerge_capturing
@@ -397,7 +397,9 @@ def main(
     try:
         cfg = load_config(config_path)
         tier_service = _make_tier_service(cfg, cache_path=tiers_cache, show_reasoning=verbose)
-        plan = plan_fn(emerge_args, tier_service)
+        # reuse the pretend run we already captured; only unparseable output
+        # (quiet formats) pays for the resolver again (avoid-double-resolve)
+        plan = build_plan_from_output(output, emerge_args, tier_service, fallback=plan_fn)
         run.plan = [asdict(e) for e in plan.entries]
         state.save_run(run, runs_dir)
         summarize = None

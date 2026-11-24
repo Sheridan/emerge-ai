@@ -67,3 +67,54 @@ def test_plan_system_membership(tmp_path):
     assert len(client.user_prompts) == 1  # glibc resolved from hints, no LLM
     assert "app-editors/vim" in client.user_prompts[0]
     assert "@system" in client.user_prompts[0]
+
+
+PRETEND = """These are the packages that would be merged, in order:
+
+Calculating dependencies... done!
+\x1b[32;01m[ebuild   R    ]\x1b[0m sys-libs/glibc-2.42::gentoo  USE="nls" 0 KiB
+[ebuild   U    ] [app-editors/vim-9.1:0::gentoo] USE="X" 1 KiB
+[blocks B      ] <app-editors/vim-9.1:0 ("...is blocking...")
+\x1b[32;01m[ebuild   R    ]\x1b[0m sys-libs/glibc-2.42::gentoo  (duplicate line) 0 KiB
+
+Total: 2 packages, in 1 segment
+"""
+
+
+def _svc(tmp_path):
+    return TierService(client=None, cache_path=tmp_path / "t.json")
+
+
+def test_build_plan_from_output_matches_resolver(tmp_path):
+    from emerge_ai.plan import build_plan_from_output
+
+    resolver_plan = build_plan(["x"], _svc(tmp_path),
+                               load_config=FakeConfigLoader(), resolve=FakeResolve())
+    parsed = build_plan_from_output(PRETEND, ["x"], _svc(tmp_path),
+                                    fallback=lambda a, s: None)
+    assert [(e.cpv, e.tier) for e in parsed.entries] == [
+        (e.cpv, e.tier) for e in resolver_plan.entries
+    ]  # glibc first (merge order preserved), repo/slot/brackets/ANSI stripped
+
+
+def test_build_plan_from_output_dedups_keeps_first(tmp_path):
+    from emerge_ai.plan import build_plan_from_output
+
+    out = PRETEND + "[ebuild   R    ] sys-libs/glibc-2.42::gentoo  again\n"
+    plan = build_plan_from_output(out, ["x"], _svc(tmp_path), fallback=lambda a, s: None)
+    assert [e.cpv for e in plan.entries] == ["sys-libs/glibc-2.42", "app-editors/vim-9.1"]
+
+
+def test_build_plan_from_output_falls_back_on_unparseable(tmp_path):
+    from emerge_ai.plan import build_plan_from_output
+
+    calls = []
+
+    def fallback(args, svc):
+        calls.append((args, svc))
+        return "sentinel"
+
+    for junk in ("app-misc/foo-1.0\n", "", "Total: 0 packages\n", "[ebuild ] malformed\n"):
+        svc = _svc(tmp_path)
+        assert build_plan_from_output(junk, ["-q", "x"], svc, fallback=fallback) == "sentinel"
+    assert [c[0] for c in calls] == [["-q", "x"]] * 4  # args passed through untouched
