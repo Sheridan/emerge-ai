@@ -71,7 +71,8 @@ def test_resume_without_run_passes_flag_to_emerge(emerge_stub, ok_compat, tmp_pa
         plan_fn=lambda a, s: None,
     )
     assert rc == 0
-    assert calls() == [["--resume"]]  # emerge keeps its own resume semantics
+    # plan-before-plain-merge: pretend resolve first, then the real emerge run
+    assert calls() == [["--resume", "--pretend"], ["--resume"]]
     assert len(list(tmp_path.glob("*.json"))) == 1  # a fresh run is recorded
     assert "passing --resume to emerge" in capsys.readouterr().err
 
@@ -114,7 +115,7 @@ def test_resume_reuses_incomplete_run_context(emerge_stub, ok_compat, tmp_path, 
     assert after["state"] == "DONE"
     assert after["incident"] == {"class": "block"}
     assert "resuming run" in capsys.readouterr().err
-    assert calls() == [[]]
+    assert calls() == [["--pretend"], []]  # plan phase first, then the resumed merge
 
 
 def _iter_input(*answers):
@@ -144,7 +145,9 @@ def test_protection_created_cleaned_on_success(emerge_stub, ok_compat, monkeypat
 
 def test_protection_failure_denied_aborts_before_merge(emerge_stub, ok_compat, monkeypatch, tmp_path):
     binary, calls = emerge_stub
-    monkeypatch.setattr(builtins, "input", _iter_input("y", "n"))
+    # order (design D2): protect runs before "Proceed?", so the first answer
+    # belongs to the recovery-point gate
+    monkeypatch.setattr(builtins, "input", _iter_input("n"))
     failed = Protection(run_id="x", failed=True)
     rc = cli.main(
         ["-a", "sys-libs/glibc"],
@@ -155,6 +158,25 @@ def test_protection_failure_denied_aborts_before_merge(emerge_stub, ok_compat, m
     )
     assert rc == 5
     assert calls() == [["sys-libs/glibc", "--pretend"]]
+
+
+def test_protection_precedes_confirmation(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    """system-rollback «Триггер защиты»: точка создаётся до ответа на «Proceed?»."""
+    binary, calls = emerge_stub
+    order = []
+    monkeypatch.setattr(builtins, "input", lambda prompt="": (order.append("asked"), "n")[1])
+    rc = cli.main(
+        ["-a", "app-misc/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-libs/foo-1.0", 3, "hint")]),
+        protect_fn=lambda run, plan: (order.append("protect"),
+                                      Protection(run_id=run.run_id, archive_dir="/tmp/x"))[1],
+        cleanup_fn=lambda prot: (order.append("cleanup"), ["cleaned"])[1],
+    )
+    assert rc == 0  # user denied the merge
+    assert order == ["protect", "asked", "cleanup"]  # point existed, then denied, then removed
+    assert calls() == [["app-misc/foo", "--pretend"]]  # merge never started
 
 
 def test_protection_failure_noninteractive_refuses(emerge_stub, ok_compat, tmp_path):
@@ -658,3 +680,85 @@ def test_ask_pretend_plan_failure_persists_incident(emerge_stub, ok_compat, monk
     assert calls() == [["-p", "app-misc/foo"]]  # no second (merge) run
     saved = [state.load_run(p.stem, runs_dir=runs) for p in runs.glob("*.json")]
     assert any(r.incident and r.incident["class"] == "plan-failed" for r in saved)
+
+
+def test_plain_protect_before_merge_tier1(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    """system-rollback: обычный запуск защищает tier<=4 до merge, без вопросов."""
+    binary, calls = emerge_stub
+    import builtins
+
+    monkeypatch.setattr(builtins, "input", lambda prompt="": pytest.fail("stdin read"))
+    order = []
+    rc = cli.main(
+        ["--noninteractive", "sys-libs/glibc"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-libs/glibc-2.42", 1, "hint")]),
+        protect_fn=lambda run, plan: (order.append("protect"),
+                                      Protection(run_id=run.run_id, archive_dir="/tmp/a"))[1],
+        cleanup_fn=lambda prot: ["dropped"],
+    )
+    assert rc == 0
+    assert order == ["protect"]  # point created, merge went ahead, cleanup after success
+    assert calls() == [["sys-libs/glibc", "--pretend"], ["sys-libs/glibc"]]
+
+
+def test_plain_rest_tier_skips_protect(emerge_stub, ok_compat, tmp_path):
+    binary, calls = emerge_stub
+    called = []
+    rc = cli.main(
+        ["--noninteractive", "app-editors/vim"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-editors/vim-9.1", 5, "hint")]),
+        protect_fn=lambda run, plan: called.append(1),
+    )
+    assert rc == 0
+    assert called == []  # rest-tier-only queue: no recovery point at all
+    assert len(calls()) == 2
+
+
+def test_plain_plan_fn_crash_protects_unconditionally(emerge_stub, ok_compat, tmp_path, capsys):
+    """D4: тиры недоступны -> точка запрошена безусловно; сбой точки -> rc 5 (noninteractive)."""
+    binary, calls = emerge_stub
+
+    def crash(args, tiers):
+        raise RuntimeError("resolver exploded")
+
+    called = []
+    failed = Protection(run_id="x", failed=True)
+    rc = cli.main(
+        ["--noninteractive", "sys-apps/foo"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=crash,
+        protect_fn=lambda run, plan: (called.append(plan), failed)[1],
+    )
+    assert rc == 5
+    assert called == [None]  # protect demanded despite the missing plan
+    assert calls() == [["sys-apps/foo", "--pretend"]]  # merge blocked
+    err = capsys.readouterr().err
+    assert "plan enrichment skipped" in err
+    assert "unresolvable queue" in err
+
+
+def test_resume_rerun_plan_failure_keeps_incident_state(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    """Повторный провал плана на уже INCIDENT-ране: без IllegalTransition-краша."""
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "3")
+    run = state.new_run(["sys-apps/foo"], Mode(noninteractive=True))
+    run.state = state.INCIDENT
+    run.incident = {"class": "block"}
+    state.save_run(run, runs_dir=tmp_path)
+
+    rc = cli.main(
+        ["--noninteractive", "--resume"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: pytest.fail("plan_fn must not run after plan resolve failed"),
+    )
+    assert rc == 3
+    assert calls() == [["--pretend"]]  # plan resolve failed; merge never ran
+    after = json.loads((tmp_path / f"{run.run_id}.json").read_text())
+    assert after["state"] == "INCIDENT"
+    assert after["incident"]["class"] == "plan-failed"

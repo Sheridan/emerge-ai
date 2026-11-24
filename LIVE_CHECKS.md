@@ -128,3 +128,19 @@ emerge-ai --noninteractive -a =app-misc/small-1.0
 # 3) endpoint неработоспособен/пустой при включённой опции
 #   → raw-перечень «changelog digest (raw):» или warning «changelog digest skipped»,
 #     код возврата прогона не меняется
+
+## Префлайт обычного запуска (plan-before-plain-merge, выполняет пользователь)
+
+```bash
+# 1) rest-tier без флагов: план-фаза видна, stdout чист
+emerge-ai app-misc/small        # обычный запуск, подтвердить [Yes/No] у emerge
+#   → в stderr: «emerge-ai plan digest:», info о точке («rest-tier ...» или пусто),
+#     в stdout — только дословный вывод emerge (в т.ч. штатный вопрос [Yes/No])
+#   → emerge резолвится дважды: видно по «These are the packages...» дважды
+# 2) tier<=4 без флагов: точка создаётся ДО подтверждения
+sudo emerge-ai --ask sys-apps/critical   # для сравнения с -a
+sudo emerge-ai sys-apps/critical         # без -a: сначала строка снапшота/архива,
+#   затем штатный вопрос emerge; при ответе No снапшот удаляется сразу
+# 3) мир при недоступном плане (например, битый атом в команде):
+emerge-ai --noninteractive =nonexistent/nope
+#   → rc != 0, «plan-failed» в отчёте, merge не запускался

@@ -17,12 +17,15 @@ def test_passthrough_stdio_and_rc(emerge_stub, capfd, ok_compat, monkeypatch, tm
     rc = cli.main(["--noninteractive", "-uDN", "@world"], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
     captured = capfd.readouterr()
     assert rc == 17
-    assert "STUB-OUT line1" in captured.out
+    # plan-before-plain-merge: the plan phase fails terminally; its emerge
+    # output mirrors to stderr so merge stdout stays a pure passthrough
+    assert "STUB-OUT line1" in captured.err
+    assert captured.out == ""
     # emerge's stderr is routed to our stderr (split-emerge-stderr); the merged
     # buffer still carries both for incident context
     assert "STUB-ERR line1" in captured.err
     assert "STUB-ERR line1" not in captured.out
-    assert calls() == [["-uDN", "@world"]]  # own flag never reaches emerge
+    assert calls() == [["-uDN", "@world", "--pretend"]]  # plan died; merge never ran
 
 
 def test_version_gate_blocks_any_emerge_call(emerge_stub, monkeypatch, capsys, tmp_path):
@@ -437,3 +440,24 @@ def test_openrc_host_changelog_warns_and_proceeds(emerge_stub, ok_compat, tmp_pa
 def test_meta_version_never_needs_systemd(tmp_path):
     # --version exits in _meta_command before any init probe
     assert cli.main(["--version"], runs_dir=str(tmp_path)) in (0, 3)
+
+
+def test_plain_world_doctor_stderr_stdout_clean(emerge_stub, ok_compat, tmp_path, capfd):
+    """run-reporting «Обычный запуск без флагов»: doctor в stderr, stdout — только emerge."""
+    from emerge_ai.plan import Plan, PlanEntry
+
+    binary, calls = emerge_stub
+    rc = cli.main(
+        ["--noninteractive", "-uDN", "@world"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-apps/baselayout-2.17", 1, "hint")]),
+    )
+    assert rc == 0
+    captured = capfd.readouterr()
+    assert "STUB-OUT line1" in captured.out  # merge passthrough intact
+    assert "emerge-ai plan digest:" in captured.err  # enrichment lives on stderr
+    assert "critical subsystem" in captured.err  # doctor warning about the tier-1 entry
+    assert captured.err.count("STUB-OUT") == 1  # only the plan-run stdout mirrored here; merge's stays in stdout
+    assert captured.err.index("STUB-OUT") < captured.err.index("emerge-ai plan digest:")  # order: emerge, then enrichment
+    assert calls() == [["-uDN", "@world", "--pretend"], ["-uDN", "@world"]]

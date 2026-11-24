@@ -62,23 +62,9 @@ def _make_tier_service(cfg: Config, cache_path=None, show_reasoning=False):
     return TierService(client, cache_path=cache_path)
 
 
-def _advance_to_merge(run, runs_dir) -> None:
-    next_state = {
-        state.VERSION_CHECK: state.PLAN,
-        state.PLAN: state.PROTECT,
-        state.PROTECT: state.MERGE,
-        state.INCIDENT: state.MERGE,
-        state.CONFIG: state.MERGE,
-    }
-    while run.state != state.MERGE and run.state in next_state:
-        state.transition(run, next_state[run.state], runs_dir)
-    if run.state != state.MERGE:
-        raise state.IllegalTransition(f"cannot advance {run.state} to MERGE")
-
-
 def _default_protect(run, plan) -> Protection:
-    if plan is None:
-        return Protection(run_id=run.run_id, notes=["no plan: recovery point skipped"])
+    # D4 (plan-before-plain-merge): with plan=None the tiers are unknown and
+    # the spec demands protection exactly then — protect unconditionally
     return rollback_mod.protect(run.run_id, plan, contents_fn=portage_compat.vdb_contents)
 
 
@@ -378,35 +364,29 @@ def main(
     # The operator can answer only here: -p and --noninteractive stay question-free.
     interactive = not pretend and not mode.noninteractive and _stdin_is_tty()
 
-    if not pretend and not ask:
-        _advance_to_merge(run, runs_dir)
-        rc, output = run_emerge_capturing(emerge_args, emerge_binary=emerge_binary)
-        if rc != 0:
-            run.incident = build_incident(rc, output, emerge_args)
-        state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
-        if rc != 0:
-            run.agent_proposal = _maybe_agent(
-                run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
-            )
-            _etc_flow(run, config_path, llm=False)
-        else:
-            _post_run_digest(run, output, config_path, runs_dir)
-        state.save_run(run, runs_dir)
-        return rc
-
+    # Common pre-merge block (design D1): every run passes through plan ->
+    # tiers -> digest/doctor; mutation runs additionally through protect
+    # BEFORE any mode-specific confirmation (D2). -p stops after the plan.
     if run.state == state.VERSION_CHECK:
         state.transition(run, state.PLAN, runs_dir)
-    plan_args = list(emerge_args)
-    if ask:
-        plan_args = drop_flags(plan_args, ASK_FLAGS)
-    if ask and not pretend:
+    plan_args = drop_flags(list(emerge_args), ASK_FLAGS)
+    if not pretend:
         plan_args.append("--pretend")
-    rc, output = run_emerge_capturing(plan_args, emerge_binary=emerge_binary)
+    # On the plain mutation path stdout must stay a byte-for-byte merge
+    # passthrough, so all plan-phase output mirrors to stderr (D3);
+    # -p/-a keep it on stdout as run-reporting normalizes.
+    plan_stream = sys.stdout if (pretend or ask) else sys.stderr
+    rc, output = run_emerge_capturing(
+        plan_args, emerge_binary=emerge_binary, stdout_stream=plan_stream
+    )
     if rc != 0:
         incident = build_incident(rc, output, plan_args)
         incident["class"] = "plan-failed"
         run.incident = incident
-        state.transition(run, state.INCIDENT, runs_dir)
+        if run.state != state.INCIDENT:  # resumed run may already sit in INCIDENT
+            state.transition(run, state.INCIDENT, runs_dir)
+        else:
+            state.save_run(run, runs_dir)
         run.agent_proposal = _maybe_agent(
             run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
         )
@@ -427,20 +407,66 @@ def main(
             def summarize(messages, _c=_llm):
                 return _c.chat(messages)
 
-        print(plan_digest(plan, stream=sys.stdout, summarize=summarize))
+        print(plan_digest(plan, stream=plan_stream, summarize=summarize), file=plan_stream)
         if is_mass_update(emerge_args, plan):
             for line in doctor_report(plan, stream=sys.stderr):
                 print(line, file=sys.stderr)
     except Exception as exc:  # enrichment must never break emerge's own flow
         print(ui.warn(f"plan enrichment skipped: {exc}"), file=sys.stderr)
 
-    if ask and pretend:
-        # pretend dominates (spec: cli-compat): plan-only, question-free, merge
-        # is never reachable with --pretend, even combined with --ask
-        print(ui.info("--pretend takes precedence over --ask: plan shown, merge not started"),
-              file=sys.stderr)
+    if pretend:
+        if ask:
+            # pretend dominates (spec: cli-compat): plan-only, question-free,
+            # merge is never reachable with --pretend, even combined with --ask
+            print(
+                ui.info("--pretend takes precedence over --ask: plan shown, merge not started"),
+                file=sys.stderr,
+            )
+        state.transition(run, state.DONE, runs_dir)
+        return 0
 
-    if ask and not pretend:
+    # --- mutation path: protection first (system-rollback spec, D2) ---
+    if run.state == state.PLAN:
+        state.transition(run, state.PROTECT, runs_dir)
+    pfn = protect_fn or _default_protect
+    if run.protection:
+        prot = Protection(
+            run_id=run.run_id,
+            snapshot=run.protection.get("snapshot"),
+            archive_dir=run.protection.get("archive"),
+            notes=["reusing recovery point from earlier attempt"],
+        )
+    elif plan is not None and not snapshot_required(plan.entries):
+        # system-rollback: rest-tier-only queue gets no recovery point
+        prot = Protection(run_id=run.run_id)
+    else:
+        prot = pfn(run, plan)
+    for note in prot.notes:
+        print(ui.info(note), file=sys.stderr)
+    run.protection = {
+        "snapshot": prot.snapshot,
+        "archive": prot.archive_dir,
+        "failed": prot.failed,
+    }
+    state.save_run(run, runs_dir)
+
+    # D4: with an unresolvable plan tiers are unknown, and the spec demands
+    # protection exactly then — a failed snapshot aborts either way
+    if prot.failed and (plan is None or snapshot_required(plan.entries)):
+        queue = "an unresolvable queue" if plan is None else "a tier<=4 queue"
+        print(ui.err(f"FAILED to create a recovery point for {queue}."), file=sys.stderr)
+        if mode.noninteractive or not confirm(
+            ui.prompt(
+                "emerge-ai: merge without recovery point is unsafe. Proceed anyway? [y/N] "
+            )
+        ):
+            print(ui.err("aborted: no recovery point."), file=sys.stderr)
+            for line in (cleanup_fn or rollback_mod.cleanup)(prot):
+                print(ui.ok(line), file=sys.stderr)  # D5: leave nothing behind
+            state.transition(run, state.DONE, runs_dir)
+            return 5
+
+    if ask:
         if mode.noninteractive:
             if not mode.responsibility:
                 print(
@@ -452,62 +478,33 @@ def main(
                 )
         elif not confirm(ui.prompt("Proceed? [y/N] ")):
             print(ui.info("aborted by user."), file=sys.stderr)
+            if prot.snapshot or prot.archive_dir:
+                for line in (cleanup_fn or rollback_mod.cleanup)(prot):
+                    print(ui.ok(line), file=sys.stderr)  # D5: no merge -> no point
             state.transition(run, state.DONE, runs_dir)
             return 0
-        merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
-        if run.state == state.PLAN:
-            state.transition(run, state.PROTECT, runs_dir)
-        pfn = protect_fn or _default_protect
-        if run.protection:
-            prot = Protection(
-                run_id=run.run_id,
-                snapshot=run.protection.get("snapshot"),
-                archive_dir=run.protection.get("archive"),
-                notes=["reusing recovery point from earlier attempt"],
-            )
-        else:
-            prot = pfn(run, plan)
-        for note in prot.notes:
-            print(ui.info(note), file=sys.stderr)
-        run.protection = {
-            "snapshot": prot.snapshot,
-            "archive": prot.archive_dir,
-            "failed": prot.failed,
-        }
-        state.save_run(run, runs_dir)
-        if prot.failed and plan is not None and snapshot_required(plan.entries):
-            print(
-                ui.err("FAILED to create a recovery point for a tier<=4 queue."),
-                file=sys.stderr,
-            )
-            if mode.noninteractive or not confirm(
-                ui.prompt(
-                    "emerge-ai: merge without recovery point is unsafe. Proceed anyway? [y/N] "
-                )
-            ):
-                print(ui.err("aborted: no recovery point."), file=sys.stderr)
-                state.transition(run, state.DONE, runs_dir)
-                return 5
-        state.transition(run, state.MERGE, runs_dir)
-        rc, output = run_emerge_capturing(merge_args, emerge_binary=emerge_binary)
-        if rc != 0:
-            run.incident = build_incident(rc, output, merge_args)
-        if rc == 0 and (prot.snapshot or prot.archive_dir):
-            for line in (cleanup_fn or rollback_mod.cleanup)(prot):
-                print(ui.ok(line), file=sys.stderr)
-        state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
-        if rc != 0:
-            run.agent_proposal = _maybe_agent(
-                run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
-            )
+
+    merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
+    state.transition(run, state.MERGE, runs_dir)
+    rc, output = run_emerge_capturing(merge_args, emerge_binary=emerge_binary)
+    if rc != 0:
+        run.incident = build_incident(rc, output, merge_args)
+    if rc == 0 and (prot.snapshot or prot.archive_dir):
+        for line in (cleanup_fn or rollback_mod.cleanup)(prot):
+            print(ui.ok(line), file=sys.stderr)
+    state.transition(run, state.DONE if rc == 0 else state.INCIDENT, runs_dir)
+    if rc != 0:
+        run.agent_proposal = _maybe_agent(
+            run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
+        )
+        if ask:
             _etc_flow(run, config_path, show_reasoning=verbose)
         else:
-            _post_run_digest(run, output, config_path, runs_dir)
-        state.save_run(run, runs_dir)
-        return rc
-
-    state.transition(run, state.DONE, runs_dir)
-    return 0
+            _etc_flow(run, config_path, llm=False)
+    else:
+        _post_run_digest(run, output, config_path, runs_dir)
+    state.save_run(run, runs_dir)
+    return rc
 
 
 if __name__ == "__main__":

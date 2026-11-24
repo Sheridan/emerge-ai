@@ -25,10 +25,14 @@ def with_color_flag(emerge_args: list[str], stream=None) -> list[str]:
     return args
 
 
-def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) -> tuple[int, str]:
+def run_emerge_capturing(
+    emerge_args: list[str], emerge_binary: str = EMERGE, stdout_stream=None
+) -> tuple[int, str]:
     """Run emerge (typically --pretend), mirroring output while buffering it
     for incident parsing and enrichment. No TTY is attached. emerge's stdout
-    mirrors to our stdout and its stderr to our stderr, byte-for-byte
+    mirrors to our stdout (or `stdout_stream`, used by the mutation-path plan
+    phase to keep stdout a pure merge passthrough) and its stderr to our
+    stderr, byte-for-byte
     (spec: console-output); the returned buffer holds both sides ANSI-stripped,
     in read order (not cross-stream normalized), because it feeds parsing and
     the LLM (design D5). Undecodable bytes are replaced, never fatal, and the
@@ -58,7 +62,11 @@ def run_emerge_capturing(emerge_args: list[str], emerge_binary: str = EMERGE) ->
                 failures.append(exc)
 
     readers = [
-        threading.Thread(target=pump, args=(proc.stdout, sys.stdout), daemon=True),
+        threading.Thread(
+            target=pump,
+            args=(proc.stdout, sys.stdout if stdout_stream is None else stdout_stream),
+            daemon=True,
+        ),
         threading.Thread(target=pump, args=(proc.stderr, sys.stderr), daemon=True),
     ]
     for t in readers:

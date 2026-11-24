@@ -12,6 +12,19 @@ def _isolate_config(monkeypatch, tmp_path):
     monkeypatch.setenv("EMERGE_AI_CONFIG", str(tmp_path / "emerge-ai.json"))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_recovery(monkeypatch):
+    """The plan phase now protects every mutation path; unit tests must never
+    reach the real /var/lib. Explicit protect_fn= arguments still win."""
+    from emerge_ai import cli as cli_mod
+    from emerge_ai.rollback import Protection
+
+    monkeypatch.setattr(
+        cli_mod, "_default_protect",
+        lambda run, plan: Protection(run_id=run.run_id, notes=["stub: no recovery"]),
+    )
+
+
 def fake_ebuild(tmp_path, cpv="cat/pkg-1.0", desc="orig"):
     """Source-tree package dir with an ebuild and files/<pv>/ payload."""
     cat, pn, pv = overlay._split_cpv(cpv)
