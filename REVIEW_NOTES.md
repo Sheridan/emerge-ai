@@ -216,7 +216,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   `/usr/share/emerge-ai/prompts` ✓ (`prompts.py:14`). Live-ebuild без стабильных
   версий — по спеке допустимо, но recall: `~arch` keywording + README про личный оверлей.
 
-### L7. В корень репозитория закоммичен pytest-артефакт `manifest`
+### L7. В корень репозитория закоммичен pytest-артефакт `manifest` — закрыто (change `remove-manifest-artifact`)
 - Файл `manifest` (116 байт) — stdout live-теста оверлея («manifest for /tmp/pytest-of-sheridan/…»),
   попал в git коммитом d886e4a. Удалить (`git rm`) и, если нужно, в `.gitignore`.
 

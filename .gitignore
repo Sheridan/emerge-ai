@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
+
+# pytest live-test stdout artifact (L7)
+/manifest
