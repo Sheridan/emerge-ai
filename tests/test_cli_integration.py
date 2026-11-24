@@ -801,3 +801,81 @@ def test_alias_risk_flag_full_auto_merge(emerge_stub, ok_compat, tmp_path):
     assert rc == 0
     assert calls() == [["app-misc/foo", "--pretend"], ["app-misc/foo"]]
     assert all("--i-understand" not in arg for call in calls() for arg in call)
+
+
+def _failing_stub_env(monkeypatch):
+    monkeypatch.setenv("EMERGE_STUB_RC", "1")
+    monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
+
+
+def test_merge_failure_tier1_tty_offer_restores(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    """system-rollback: сбой tier≤4 с точкой + TTY-согласие → откат исполнен, задокументирован."""
+    binary, calls = emerge_stub
+    _failing_stub_env(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda p="": "y")
+    prot = Protection(run_id="x", archive_dir="/tmp/point")
+    seen = []
+    rc = cli.main(
+        ["sys-apps/critical"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-apps/critical-1.0", 1, "hint")]),
+        protect_fn=lambda run, plan: prot,
+        rollback_executor=lambda p: seen.append(p.archive_dir),
+    )
+    assert rc == 1  # код emerge сохраняется
+    assert seen == ["/tmp/point"]
+    run = next(tmp_path.glob("*.json"))
+    assert json.loads(run.read_text())["rollback"] == "restored"
+
+
+def test_merge_failure_offer_declined_keeps_artifacts(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    _failing_stub_env(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda p="": "n")
+    cleaned = []
+    restored = []
+    rc = cli.main(
+        ["sys-apps/critical"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("sys-apps/critical-1.0", 1, "hint")]),
+        protect_fn=lambda run, plan: Protection(run_id="x", archive_dir="/tmp/point"),
+        cleanup_fn=lambda p: cleaned.append(1) or [],
+        rollback_executor=lambda p: restored.append(1),
+    )
+    assert rc == 1
+    assert restored == [] and cleaned == []  # отказ: ничего не восстановлено, артефакты целы
+
+
+def test_merge_failure_noninteractive_hints_without_restoring():
+    """Seam-тест: noninteractive без флага — только подсказка, артефакты целы.
+    (Через main этот случай недостижим: гейт автономности не пустит tier≤4 merge.)"""
+    from emerge_ai.cli import _offer_rollback
+    from emerge_ai.flags import Mode
+    from emerge_ai.state import RunState
+
+    restored = []
+    run = RunState(run_id="r")
+    _offer_rollback(
+        Mode(noninteractive=True),
+        Protection(run_id="x", archive_dir="/tmp/point"),
+        run,
+        executor=lambda p: restored.append(1),
+    )
+    assert restored == [] and run.rollback == "offered-skipped"
+
+
+def test_merge_failure_rest_tier_has_no_offer(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+    _failing_stub_env(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda p="": pytest.fail("must not ask"))
+    called = []
+    rc = cli.main(
+        ["sys-apps/relax"],
+        emerge_binary=binary,
+        runs_dir=str(tmp_path),
+        plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
+        rollback_fn=lambda *a, **k: called.append(1),
+    )
+    assert rc == 1 and called == []  # rest-tier: точки нет — предложения нет

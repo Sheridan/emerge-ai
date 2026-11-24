@@ -10,6 +10,7 @@ class Mode:
     noninteractive: bool = False
     responsibility: bool = False
     changelog: bool = False
+    rollback: bool = False
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,12 @@ _OWN_FLAG_DEFS = (
         "--changelog",
         "changelog",
         "changelog digest (news/GLESA/GitHub/git) instead of emerging",
+    ),
+    _OwnFlagDef(
+        "--rollback",
+        "rollback",
+        "recovery mode: list recovery points, restore one after confirmation; "
+        "emerge is never started (noninteractive needs the responsibility flag)",
     ),
 )
 

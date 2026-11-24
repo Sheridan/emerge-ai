@@ -6,6 +6,7 @@ import inspect
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from dataclasses import asdict
 from urllib.parse import quote
@@ -104,6 +105,122 @@ def _mutation_gate(mode, plan, *, audit_path=gate_mod.AUDIT_PATH, audit_fn=gate_
     if verdict == gate_mod.DENY:
         return False, reason
     return True, reason
+
+
+def _rollback_mode(
+    mode,
+    *,
+    list_fn=None,
+    rollback_fn=rollback_mod.rollback,
+    executor=None,
+    confirm_fn=confirm,
+    input_fn=None,
+) -> int:
+    """--rollback recovery mode: show recovery points, restore the chosen one
+    through the guarded channel; emerge is never started here."""
+    recs = (list_fn or rollback_mod.list_protections)()
+    if not recs:
+        print(ui.err("no recovery points found (nothing to restore)."), file=sys.stderr)
+        return 5
+    print("recovery points:", file=sys.stderr)
+    usable = []
+    for i, r in enumerate(recs, 1):
+        pkgs = ", ".join(p.get("cpv", "?") for p in r.packages[:4]) or "unknown queue"
+        flag = " [failed]" if r.failed else " [artifact missing]" if r.missing else ""
+        print(
+            f"  {i}. {r.run_id}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(r.created))}"
+            f"  {r.kind}  {pkgs}{flag}",
+            file=sys.stderr,
+        )
+        if not r.failed and not r.missing:
+            usable.append((i, r))
+    if not usable:
+        print(ui.err("no usable recovery point (all failed or lost)."), file=sys.stderr)
+        return 5
+    if mode.noninteractive and not mode.responsibility:
+        print(
+            ui.err(
+                "--noninteractive: refusing to restore without "
+                "--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences; "
+                "nothing was changed. Manual restore: re-run interactively, or restore "
+                f"{usable[-1][1].path} yourself (btrfs snapshot swap / tar -x rootfs)."
+            ),
+            file=sys.stderr,
+        )
+        return 5
+    idx = usable[-1][0]  # newest by default
+    if not mode.noninteractive:
+        try:
+            answer = (input_fn or input)(  # builtins lookup at call time: test-patchable
+                ui.prompt(f"Recovery point to restore [{usable[-1][0]}] (1-{usable[-1][0]}): ")
+            ).strip()
+        except EOFError:
+            answer = ""
+        if answer.isdigit() and 1 <= int(answer) <= usable[-1][0]:
+            wanted = int(answer)
+            idx = next((i for i, r in usable if i == wanted), idx)
+    rec = next(r for i, r in usable if i == idx)
+    prot = Protection(
+        run_id=rec.run_id,
+        snapshot=rec.path if rec.kind == "snapshot" else None,
+        archive_dir=rec.path if rec.kind == "archive" else None,
+    )
+    outcome = rollback_fn(
+        prot,
+        responsibility=mode.responsibility,
+        confirm_fn=confirm_fn,
+        executor=executor or rollback_mod.restore_archive,
+        root_subvolume=rec.kind == "snapshot",
+    )
+    print(outcome.text, file=sys.stderr)
+    return 0
+
+
+def _offer_rollback(
+    mode,
+    prot: Protection,
+    run,
+    *,
+    confirm_fn=confirm,
+    rollback_fn=rollback_mod.rollback,
+    executor=None,
+) -> None:
+    """Offer after a failed merge (spec: system-rollback): responsibility flag
+    restores on its own, interactive asks with consequences, plain
+    --noninteractive only hints — artifacts are never dropped silently."""
+    if not (prot.snapshot or prot.archive_dir):
+        return  # rest-tier queue: no recovery point was ever created
+    if mode.responsibility:
+        run.rollback = (
+            rollback_fn(
+                prot,
+                responsibility=True,
+                confirm_fn=confirm_fn,
+                executor=executor or rollback_mod.restore_archive,
+                root_subvolume=bool(prot.snapshot),
+            ).kind
+        )
+    elif mode.noninteractive:
+        run.rollback = "offered-skipped"
+        print(
+            ui.warn(
+                "recovery point saved, nothing restored in --noninteractive; "
+                "run `emerge-ai --rollback` to restore it (artifacts kept)"
+            ),
+            file=sys.stderr,
+        )
+    else:
+        run.rollback = (
+            rollback_fn(
+                prot,
+                responsibility=False,
+                confirm_fn=confirm_fn,
+                executor=executor or rollback_mod.restore_archive,
+                root_subvolume=bool(prot.snapshot),
+            ).kind
+        )
+    if run.rollback:
+        print(ui.info(f"rollback channel: {run.rollback}"), file=sys.stderr)
 
 
 def _stdin_is_tty() -> bool:
@@ -358,6 +475,9 @@ def main(
     agent_fn=None,
     systemd_check=init_check.is_systemd,
     audit_path: str | None = None,  # None -> gate.AUDIT_PATH at call time (test-injectable)
+    protection_list_fn=None,
+    rollback_fn=None,
+    rollback_executor=None,
 ) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -395,6 +515,14 @@ def main(
                 f"detected init: {init_name}; refusing to mutate this system (emerge not started)"
             ), file=sys.stderr)
             return 6
+
+    if mode.rollback:  # recovery channel (spec: system-rollback): never emerges
+        return _rollback_mode(
+            mode,
+            list_fn=protection_list_fn,
+            rollback_fn=rollback_fn or rollback_mod.rollback,
+            executor=rollback_executor,
+        )
 
     run, emerge_args = _resolve_resume(emerge_args, mode, runs_dir)
 
@@ -543,6 +671,13 @@ def main(
     if rc != 0:
         run.agent_proposal = _maybe_agent(
             run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
+        )
+        _offer_rollback(
+            mode,
+            prot,
+            run,
+            rollback_fn=rollback_fn or rollback_mod.rollback,
+            executor=rollback_executor,
         )
         if ask:
             _etc_flow(run, config_path, show_reasoning=verbose)

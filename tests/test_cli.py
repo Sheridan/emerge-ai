@@ -560,3 +560,83 @@ def test_mutation_gate_no_plan_noninteractive_denied(tmp_path):
         Mode(noninteractive=True), None, audit_path=tmp_path / "d.log"
     )
     assert not allowed and "refusing auto-merge" in reason
+
+
+# --- --rollback recovery mode (wire-rollback-channel) ---
+
+
+def _rec(run_id="r1", kind="archive", path="/tmp/a/r1", created=100.0, **kw):
+    from emerge_ai.rollback import ProtectionRecord
+
+    return ProtectionRecord(
+        run_id=run_id, created=created, kind=kind, path=path,
+        packages=[{"cpv": "sys-apps/critical-1.0", "tier": 1}], **kw
+    )
+
+
+def test_rollback_mode_lists_confirms_and_restores(tmp_path, ok_compat, monkeypatch, capfd):
+    from emerge_ai.rollback import ProtectionRecord  # noqa: F401
+
+    monkeypatch.setattr(builtins, "input", lambda p="": "y")
+    seen = []
+    rc = cli.main(
+        ["--rollback"],
+        emerge_binary=str(tmp_path / "never-emerge"),
+        protection_list_fn=lambda: [_rec()],
+        rollback_executor=lambda prot: seen.append(prot.archive_dir),
+    )
+    assert rc == 0
+    assert seen == ["/tmp/a/r1"]  # archive point handed to the executor
+    err = capfd.readouterr().err
+    assert "sys-apps/critical-1.0" in err and "archive" in err  # table shown
+
+
+def test_rollback_mode_declined_changes_nothing(tmp_path, ok_compat, monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda p="": "n")
+    seen = []
+    rc = cli.main(["--rollback"], emerge_binary=str(tmp_path / "never"),
+                  protection_list_fn=lambda: [_rec()],
+                  rollback_executor=lambda prot: seen.append(1))
+    assert rc == 0 and seen == []
+
+
+def test_rollback_mode_noninteractive_refuses_without_flag(emerge_stub, ok_compat, capfd):
+    binary, calls = emerge_stub
+    seen = []
+    rc = cli.main(["--noninteractive", "--rollback", "sys-apps/whatever"],
+                  emerge_binary=binary,
+                  protection_list_fn=lambda: [_rec()],
+                  rollback_executor=lambda prot: seen.append(1))
+    assert rc == 5
+    assert seen == []
+    assert calls() == []  # emerge is never started in recovery mode, atoms or not
+    assert "Manual restore" in capfd.readouterr().err  # refuse + instructions
+
+
+def test_rollback_mode_responsibility_restores_latest_autonomously(tmp_path, ok_compat):
+    seen = []
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "--rollback"],
+                  emerge_binary=str(tmp_path / "never"),
+                  protection_list_fn=lambda: [_rec("old", created=1.0),
+                                              _rec("new", path="/tmp/a/new", created=2.0)],
+                  rollback_executor=lambda prot: seen.append(prot.run_id))
+    assert rc == 0 and seen == ["new"]  # newest point, no prompt
+
+
+def test_rollback_mode_no_points_is_error(emerge_stub, ok_compat):
+    binary, calls = emerge_stub
+    rc = cli.main(["--noninteractive", "--rollback"], emerge_binary=binary,
+                  protection_list_fn=lambda: [])
+    assert rc == 5 and calls() == []
+
+
+def test_rollback_mode_snapshot_case_prints_offline_instructions(tmp_path, ok_compat, monkeypatch, capfd):
+    """Недоступный онлайн-откат жив: снимок — инструкция, ФС не тронута."""
+    monkeypatch.setattr(builtins, "input", lambda p="": "y")
+    seen = []
+    rc = cli.main(["--rollback"], emerge_binary=str(tmp_path / "never"),
+                  protection_list_fn=lambda: [_rec(kind="snapshot", path="/.snapshots/x")],
+                  rollback_executor=lambda prot: seen.append(1))
+    assert rc == 0 and seen == []
+    err = capfd.readouterr().err
+    assert "rescue environment" in err and "artifacts were kept" in err

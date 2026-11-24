@@ -3,6 +3,7 @@ archive; guarded rollback channel (spec: system-rollback)."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tarfile
 import time
@@ -15,6 +16,7 @@ from emerge_ai.tiers import snapshot_required
 SNAP_BASE = "/.snapshots/emerge-ai"
 ARCHIVE_BASE = "/var/lib/emerge-ai/archives"
 USER_DATA_PREFIXES = ("/home/", "/root/", "/var/cache/", "/var/tmp/", "/tmp/")
+REGISTRY_NAME = "manifest.json"  # recovery-point registry inside SNAP_BASE
 
 
 def detect_root_fs() -> str:
@@ -37,6 +39,59 @@ class Protection:
     skipped_user_data: int = 0
     failed: bool = False
     notes: list[str] = field(default_factory=list)
+
+
+def _registry_path(snap_base: str) -> Path:
+    return Path(snap_base) / REGISTRY_NAME
+
+
+def _registry_write(snap_base: str, entries: list[dict]) -> None:
+    try:
+        p = _registry_path(snap_base)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(entries, ensure_ascii=False, indent=1))
+    except OSError:
+        pass  # the registry must never break protect/cleanup
+
+
+def _registry_register(snap_base: str, record: dict) -> None:
+    """Add/replace the run's registry line (idempotent per run_id)."""
+    try:
+        entries = json.loads(_registry_path(snap_base).read_text())
+        if not isinstance(entries, list):
+            entries = []
+    except (OSError, ValueError):
+        entries = []
+    entries = [e for e in entries if e.get("run_id") != record["run_id"]]
+    entries.append(record)
+    _registry_write(snap_base, entries)
+
+
+def _registry_unregister(snap_base: str, run_id: str) -> None:
+    try:
+        entries = json.loads(_registry_path(snap_base).read_text())
+    except (OSError, ValueError):
+        return
+    rest = [e for e in entries if isinstance(e, dict) and e.get("run_id") != run_id]
+    if len(rest) != len(entries):
+        _registry_write(snap_base, rest)
+
+
+def _register(prot: Protection, plan: Plan | None, snap_base: str) -> None:
+    _registry_register(
+        snap_base,
+        {
+            "run_id": prot.run_id,
+            "created": time.time(),
+            "kind": "snapshot" if prot.snapshot else "archive",
+            "path": prot.snapshot or prot.archive_dir or "",
+            "packages": [
+                {"cpv": e.cpv, "tier": e.tier} for e in (plan.entries if plan else [])
+            ],
+            "failed": prot.failed,
+            "notes": list(prot.notes),
+        },
+    )
 
 
 def _default_btrfs(args: list[str]) -> str:
@@ -71,6 +126,7 @@ def protect(
             btrfs(["subvolume", "snapshot", "-r", "/", target])
             prot.snapshot = target
             prot.notes.append(f"btrfs snapshot: {target}")
+            _register(prot, plan, snap_base)
             return prot
         except Exception as exc:
             prot.notes.append(f"snapshot failed ({exc}); falling back to archive")
@@ -79,6 +135,7 @@ def protect(
     if contents_fn is None:
         prot.failed = True
         prot.notes.append("no CONTENTS source: cannot archive")
+        _register(prot, plan, snap_base)
         return prot
     try:
         arch_dir = Path(archive_base) / run_id
@@ -106,24 +163,112 @@ def protect(
     except Exception as exc:
         prot.failed = True
         prot.notes.append(f"archive failed: {exc}")
+    _register(prot, plan, snap_base)
     return prot
 
 
-def cleanup(prot: Protection, *, btrfs=_default_btrfs) -> list[str]:
-    """Drop recovery points after a successful run."""
+def cleanup(prot: Protection, *, btrfs=_default_btrfs, snap_base: str = SNAP_BASE) -> list[str]:
+    """Drop recovery points after a successful run (registry entry included)."""
     done = []
+    gone = True
     if prot.snapshot:
         try:
             btrfs(["subvolume", "delete", prot.snapshot])
             done.append(f"deleted snapshot {prot.snapshot}")
         except Exception as exc:
+            gone = False
             done.append(f"snapshot delete failed: {exc}")
     if prot.archive_dir:
         import shutil
 
         shutil.rmtree(prot.archive_dir, ignore_errors=True)
+        gone = gone and not Path(prot.archive_dir).exists()
         done.append(f"removed archive {prot.archive_dir}")
+    if gone:
+        _registry_unregister(snap_base, prot.run_id)
     return done
+
+
+@dataclass
+class ProtectionRecord:
+    run_id: str
+    created: float
+    kind: str  # snapshot | archive
+    path: str
+    packages: list = field(default_factory=list)
+    notes: list = field(default_factory=list)
+    failed: bool = False
+    from_manifest: bool = True  # False -> discovered on disk, registry silent
+    missing: bool = False  # registry promised it, disk has nothing
+
+
+def list_protections(
+    *, snap_base: str = SNAP_BASE, archive_base: str = ARCHIVE_BASE
+) -> list[ProtectionRecord]:
+    """Recovery points known to the registry, unioned with what is on disk
+    (desyncs surfaced: from_manifest=False for orphan dirs, missing=True for
+    registry lines whose artifact is gone). Newest last."""
+    records: dict[str, ProtectionRecord] = {}
+    try:
+        entries = json.loads(_registry_path(snap_base).read_text())
+    except (OSError, ValueError):
+        entries = []
+    for e in entries if isinstance(entries, list) else []:
+        if not isinstance(e, dict) or not e.get("run_id"):
+            continue
+        rec = ProtectionRecord(
+            run_id=e["run_id"],
+            created=e.get("created", 0.0),
+            kind=e.get("kind", "archive"),
+            path=e.get("path", ""),
+            packages=e.get("packages", []),
+            notes=e.get("notes", []),
+            failed=e.get("failed", False),
+        )
+        if not rec.failed and (not rec.path or not Path(rec.path).exists()):
+            rec.missing = True
+        records[rec.run_id] = rec
+    for base, kind in ((snap_base, "snapshot"), (archive_base, "archive")):
+        try:
+            dirs = sorted(Path(base).iterdir())
+        except OSError:
+            continue
+        for d in dirs:
+            if not d.is_dir() or d.name in records:
+                continue
+            records[d.name] = ProtectionRecord(
+                run_id=d.name,
+                created=d.stat().st_mtime,
+                kind=kind,
+                path=str(d),
+                from_manifest=False,
+            )
+    return sorted(records.values(), key=lambda r: r.created)
+
+
+def restore_archive(prot: Protection, target_root: str | str = "/") -> str:
+    """Online executor for the fallback archive: unpack rootfs/* members under
+    target_root, replacing the files the merge touched."""
+    if not prot.archive_dir:
+        raise ValueError("no archive to restore")
+    root = Path(target_root)
+    count = 0
+    with tarfile.open(Path(prot.archive_dir) / "files.tar") as tar:
+        for m in tar.getmembers():
+            name = m.name
+            if not name.startswith("rootfs/"):
+                continue
+            dest = root / name[len("rootfs/"):]
+            if m.isdir():
+                dest.mkdir(parents=True, exist_ok=True)
+                continue
+            if not m.isfile():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with tar.extractfile(m) as src:
+                dest.write_bytes(src.read())
+            count += 1
+    return f"restored {count} file(s) from {prot.archive_dir} into {root}"
 
 
 @dataclass

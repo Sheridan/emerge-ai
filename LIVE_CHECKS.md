@@ -162,3 +162,16 @@ sudo emerge-ai --noninteractive sys-apps/critical
 sudo emerge-ai --noninteractive --i-understand-the-risks sys-apps/critical
 # 4) интерактив: вердикт ASK печатается, поведение как раньше (вопрос emerge)
 ```
+
+## Канал отката (wire-rollback-channel)
+
+```bash
+# 1) режим восстановления: список + выбор + подтверждение
+sudo emerge-ai --rollback
+#   → таблица точек (run-id, дата, kind, пакеты), вопрос, разбор последствий,
+#     «restored N file(s) ...» для архива; для btrfs-снайма — пошаговая
+#     инструкция, снапшот НЕ удалён, система не изменена
+# 2) после сбоя tier≤4 в интерактиве: сразу после инцидента — вопрос отката;
+#     «n» → артефакты сохранены; в --noninteractive — подсказка --rollback
+# 3) sudo emerge-ai --noninteractive --rollback  → отказ + ручная инструкция, rc 5
+```

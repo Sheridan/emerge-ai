@@ -1,5 +1,6 @@
 import json
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -99,3 +100,74 @@ def test_rollback_root_subvolume_is_manual_and_keeps_artifacts():
     assert out.kind == "instructions"
     assert "rescue" in out.text and "/snap/r7" in out.text
     assert not called
+
+
+# --- recovery-point registry (wire-rollback-channel) ---
+
+
+def _registry(snap_base):
+    return json.loads((Path(snap_base) / "manifest.json").read_text())
+
+
+def test_registry_written_on_snapshot_and_idempotent(tmp_path):
+    snap = tmp_path / "snaps"
+    prot = protect("reg1", T1, fs="btrfs", snap_base=str(snap), btrfs=FakeBtrfs())
+    (snap / "reg1").mkdir()  # FakeBtrfs does not create the subvolume dir
+    entries = _registry(str(snap))
+    assert len(entries) == 1 and entries[0]["kind"] == "snapshot"
+    assert entries[0]["packages"] == [{"cpv": "sys-libs/glibc-2.42", "tier": 1}]
+    protect("reg1", T1, fs="btrfs", snap_base=str(snap), btrfs=FakeBtrfs())
+    assert len(_registry(str(snap))) == 1  # idempotent per run_id
+    assert prot.snapshot == f"{snap}/reg1"
+
+
+def test_registry_lists_disk_union_and_desync(tmp_path):
+    from emerge_ai.rollback import list_protections
+
+    snap, arch = tmp_path / "snaps", tmp_path / "arch"
+    contents = {"sys-libs/glibc-2.42": ["/etc/hostname"]}
+    (tmp_path / "etc-host").write_text("h")
+    prot = protect(
+        "reg2", T1, fs="ext4", snap_base=str(snap), archive_base=str(arch),
+        contents_fn=lambda cpv: [str(tmp_path / "etc-host")],
+    )
+    orphan = arch / "orphan-run"
+    orphan.mkdir(parents=True)
+    recs = list_protections(snap_base=str(snap), archive_base=str(arch))
+    by_id = {r.run_id: r for r in recs}
+    assert by_id["reg2"].kind == "archive" and by_id["reg2"].from_manifest
+    assert by_id["orphan-run"].from_manifest is False  # disk-only record marked
+    Path(prot.archive_dir).rename(prot.archive_dir + ".gone")  # artifact lost
+    recs = list_protections(snap_base=str(snap), archive_base=str(arch))
+    assert next(r for r in recs if r.run_id == "reg2").missing is True
+
+
+def test_cleanup_drops_registry_entry(tmp_path):
+    from emerge_ai.rollback import list_protections
+
+    snap, arch = tmp_path / "snaps", tmp_path / "arch"
+    (tmp_path / "f").write_text("x")
+    prot = protect(
+        "reg3", T1, fs="ext4", snap_base=str(snap), archive_base=str(arch),
+        contents_fn=lambda cpv: [str(tmp_path / "f")],
+    )
+    assert any(r.run_id == "reg3" for r in list_protections(snap_base=str(snap)))
+    cleanup(prot, snap_base=str(snap))
+    assert not any(r.run_id == "reg3" for r in list_protections(snap_base=str(snap)))
+
+
+def test_restore_archive_roundtrip(tmp_path):
+    from emerge_ai.rollback import restore_archive
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "hello.txt").write_text("pre-merge")
+    arch = tmp_path / "arch" / "r9"
+    arch.mkdir(parents=True)
+    with tarfile.open(arch / "files.tar", "w") as tar:
+        tar.add(src / "hello.txt", arcname="rootfs/usr/share/hello.txt")
+    target = tmp_path / "root"
+    prot = Protection(run_id="r9", archive_dir=str(arch))
+    msg = restore_archive(prot, target_root=str(target))
+    assert "1 file" in msg
+    assert (target / "usr/share/hello.txt").read_text() == "pre-merge"

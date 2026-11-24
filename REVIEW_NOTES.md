@@ -42,7 +42,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
 - Сюда же: `tiers.noninteractive_auto_allowed` (tiers.py:157) не вызывается ни из одного
   production-модуля (только тесты) — «матрица автономности» спека живёт только на бумаге.
 
-### H3. Канал отката не выведен в CLI
+### H3. Канал отката не выведен в CLI — закрыто (change `wire-rollback-channel`)
 - `rollback.rollback(...)` (`src/emerge_ai/rollback.py:135`: последствия → подтверждение →
   восстановление) не вызывается из cli. Наружу торчат только `protect` (cli.py:80) и
   `cleanup` (cli.py:414).

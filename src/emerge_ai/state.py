@@ -48,6 +48,7 @@ class RunState:
     protection: dict | None = None
     agent_proposal: str | None = None
     changelog: str | None = None
+    rollback: str | None = None  # rollback channel outcome (wire-rollback-channel)
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 
