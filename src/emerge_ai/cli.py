@@ -20,7 +20,7 @@ from emerge_ai.llm import LLMClient, LLMError
 from emerge_ai.plan import build_plan
 from emerge_ai import rollback as rollback_mod
 from emerge_ai.rollback import Protection
-from emerge_ai.runner import confirm, drop_flags, flag_present, run_emerge, run_emerge_capturing
+from emerge_ai.runner import confirm, drop_flags, flag_present, run_emerge_capturing
 from emerge_ai.tiers import TierService, snapshot_required
 from emerge_ai import ui
 

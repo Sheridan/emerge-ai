@@ -137,7 +137,7 @@ packaging, prompts, openspec-спеки). Ничего не исправляло
   `run_hook` no-op (cli вызывает его «в пустоту»). Мёртвая индирекция: либо убрать,
   либо wired (богаче — но тогда дублирует прямой вызов plan_digest).
 
-### M8. Слот `runner.run_emerge` (чистый passthrough) не используется
+### M8. Слот `runner.run_emerge` (чистый passthrough) не используется — закрыто (change `remove-unused-run-emerge`)
 - `runner.py:13-15` — ни одного вызова в src и тестах (все идут через
   `run_emerge_capturing`). Мелочь, но «emerge never replaced» лучше подтверждать одним
   путём исполнения.

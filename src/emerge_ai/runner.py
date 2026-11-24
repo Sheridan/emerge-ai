@@ -11,11 +11,6 @@ from emerge_ai import ui
 EMERGE = "emerge"
 
 
-def run_emerge(emerge_args: list[str], emerge_binary: str = EMERGE) -> int:
-    """Passthrough: inherited stdio, emerge's exit code returned verbatim."""
-    return subprocess.run([emerge_binary, *emerge_args]).returncode
-
-
 def with_color_flag(emerge_args: list[str], stream=None) -> list[str]:
     """Emerge runs with captured stdout, so portage's auto-detect never colors;
     request color explicitly when emerge-ai's own stdout takes it
