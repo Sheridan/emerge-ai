@@ -20,7 +20,6 @@ from emerge_ai.sandbox import Sandbox
 MAX_ROUNDS = 8
 MAX_TOOL_CALLS = 14
 MAX_TOOL_RESULT_CHARS = 4000
-MAX_ASK_QUESTIONS = 3  # questions shown to the operator per incident (spec: agent-loop-consent)
 ASK_MAX_OPTIONS = 6
 
 # Limit-exhaustion dialogue (spec: Исчерпание лимита токенов, design D2/D3):
@@ -64,6 +63,14 @@ CLASS_SKELETONS: dict[str, str] = {
         "conflicts, missing or masked ebuilds, broken world file). Analyze stderr; probe "
         "with pretend_emerge on single packages; consider --backtrack, narrow unmask, or "
         "removing stale world entries. Never propose an actual merge."
+    ),
+    "plan-degraded": (
+        "The --pretend plan exited 0, yet the merge list is degraded: packages were "
+        "skipped by conflicts or masks and the world/config files have problems. The "
+        "full plan text is on disk at the incident's 'log_path' file — inspect the "
+        "evidence around each finding there with grep_log/read_file_window. Explain per "
+        "package why it is not merged and propose the minimal whitelist fix "
+        "(accept_keywords, mask, etc-update, world repair). Never propose an actual merge."
     ),
     "cycle": (
         "A dependency cycle was found. Locate the cycle lines in the output; propose "
@@ -161,8 +168,10 @@ ASK_TOOL_SPEC = {
         "description": (
             "Ask the operator one question. Provide 1-6 numbered options; every option "
             "must have been checked with pretend_emerge where it changes dependency "
-            "resolution, and must state its consequences. One question per call; the "
-            "answer comes back as the tool result."
+            "resolution, and must state its consequences. An option that runs one of "
+            "the EXECUTABLE VARIANTS carries its whitelist 'key' verbatim; an option "
+            "without a key is advice only — never invent keys or actions. One question "
+            "per call; the answer comes back as the tool result."
         ),
         "parameters": {
             "type": "object",
@@ -175,6 +184,10 @@ ASK_TOOL_SPEC = {
                         "properties": {
                             "label": {"type": "string"},
                             "consequences": {"type": "string"},
+                            "key": {
+                                "type": "string",
+                                "description": "whitelist variant key (executable option)",
+                            },
                         },
                         "required": ["label", "consequences"],
                     },
@@ -192,7 +205,9 @@ ASK_DIRECTIVE_INTERACTIVE = (
     "package, which breakage to accept), you MUST ask before writing 'PROPOSAL:' — use the "
     "ask_operator tool: one question per call, 1 to 6 numbered options stating their "
     "consequences, each option checked once with pretend_emerge where it changes dependency "
-    "resolution and no further; then wait for the answer and continue the analysis with it."
+    "resolution and no further; an executable option carries its whitelist 'key' verbatim "
+    "(you may reorder and comment on the listed variants, never invent new ones); "
+    "then wait for the answer and continue the analysis with it."
 )
 ASK_DIRECTIVE_QUIET = (
     "Do not ask the operator anything — this run is not interactive. Make the "
@@ -221,16 +236,19 @@ def validate_question(question, options) -> str:
         for key in ("label", "consequences"):
             if not str(option.get(key) or "").strip():
                 return f"ask_operator: option {num} needs a non-empty '{key}'"
+        if "key" in option and not str(option.get("key") or "").strip():
+            return (f"ask_operator: option {num} has an empty 'key' "
+                    "(omit it for advice-only options)")
     return ""
 
 
 @dataclass
 class _AskState:
-    """Per-proposal bookkeeping for the question channel: per-round guard (D4),
-    question budget and the closed flag set by quit/EOF (D5)."""
+    """Per-proposal bookkeeping for the question channel: per-round guard (D4)
+    and the closed flag set by quit/EOF (D5). There is no question budget:
+    rounds are bounded by the operator, not by a counter (spec: exits and
+    limits of the polling — the guard is the operator themselves)."""
 
-    max_questions: int = MAX_ASK_QUESTIONS
-    shown: int = 0
     closed: bool = False
     turn: int = 0
 
@@ -390,13 +408,20 @@ class IncidentAgent:
             consequences = str(chosen.get("consequences", "")).strip()
             answer = f"{label} — {consequences}" if consequences else label
             ui.echo_answer(answer, palette, stream)
-            return {"status": "answered", "choice": answer}
+            out = {"status": "answered", "choice": answer}
+            # a typed option carries its whitelist key: the number choice hands
+            # the execution core the variant key (spec: consent-dialogue)
+            vkey = str(chosen.get("key", "")).strip()
+            if vkey:
+                out["variant"] = vkey
+            return out
         ui.echo_answer(text, palette, stream)  # unrecognized input is the operator's own text
         return {"status": "answered", "free_text": text}
 
     def _ask_operator(self, state: _AskState, result: AgentResult, args: dict, turns: dict) -> dict:
-        """Guards and budget around the channel (design D4/D5); only a shown
-        question spends the budget, and the answer is trusted input (D8)."""
+        """Guards around the channel (design D4/D5); rounds are unlimited — the
+        operator is the guard (EOF/quit close the channel, every question can
+        be refused), and the answer is trusted input (D8)."""
         if state.closed:
             return {
                 "status": "no-answer",
@@ -406,13 +431,6 @@ class IncidentAgent:
             }
         if turns["n"] == state.turn:
             return {"error": "one question at a time; wait for the answer before asking again"}
-        if state.shown >= state.max_questions:
-            return {
-                "status": "no-answer",
-                "reason": "limit",
-                "instruction": f"at most {state.max_questions} questions per incident; "
-                               "conclude now with a proposal and an 'ASSUMPTIONS:' section",
-            }
         problem = validate_question(args.get("question"), args.get("options"))
         if problem:
             result.trace.append(("ask_operator", args))
@@ -420,11 +438,17 @@ class IncidentAgent:
         if result.tool_calls_used >= self.max_tool_calls:
             return {"error": "tool-call budget exhausted; answer with what you have"}
         result.tool_calls_used += 1
-        state.shown += 1
         state.turn = turns["n"]
         options = list(args["options"])
         result.trace.append(("ask_operator", {"question": args["question"], "options": options}))
         answer = dict(self.ask_channel(str(args["question"]), options) or {})
+        if answer.get("variant"):
+            # a typed option was chosen: hand its key onward, but the gate is
+            # the only executor — the model must not claim it already ran
+            answer["instruction"] = (
+                f"operator picked executable variant '{answer['variant']}'; it runs only "
+                "after your proposal, through the consent gate — reflect it in 'PROPOSAL:'"
+            )
         if answer.get("status") != "answered":
             state.closed = True
         result.trace.append(("ask_answer", answer))
@@ -489,6 +513,17 @@ class IncidentAgent:
             + (ASK_DIRECTIVE_INTERACTIVE if interactive else ASK_DIRECTIVE_QUIET)
         )
         user = injection.wrap_untrusted(json.dumps(incident, ensure_ascii=False), source="incident")
+        variant_note = ""
+        if interactive:
+            # the whitelist is shown so ask_operator options can quote real keys;
+            # a model cannot execute what is not listed (spec: consent-dialogue 3.3)
+            listing = "\n".join(f"- {v['key']}: {v['title']}" for v in typed_variants(incident))
+            variant_note = (
+                "\n\n# EXECUTABLE VARIANTS (whitelist)\n"
+                + injection.wrap_untrusted(listing, source="variant-whitelist")
+                + "\nAn ask_operator option that runs one of these MUST carry its 'key' "
+                "verbatim; options without a key are advice only."
+            )
         precedent_note = ""
         if self.journal_path:
             fp = journal.fingerprint(incident.get("stderr_tail", "") + klass)
@@ -508,6 +543,7 @@ class IncidentAgent:
                 "role": "user",
                 "content": "Incident context follows. Find the root cause and propose a fix.\n"
                 + user
+                + variant_note
                 + precedent_note,
             },
         ]

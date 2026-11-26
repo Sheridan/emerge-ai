@@ -17,7 +17,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
-from emerge_ai import changelog, config_edit, digest, etcupdate, journal
+from emerge_ai import changelog, config_edit, consent as consent_mod, digest, etcupdate, journal, triage
 from emerge_ai import gate as gate_mod, init_check
 from emerge_ai import overlay as overlay_mod
 from emerge_ai.incident import build_incident
@@ -75,8 +75,8 @@ def _mutation_gate(mode, plan, *, audit_path=gate_mod.AUDIT_PATH, audit_fn=gate_
     """Autonomy-matrix verdict for the merge about to run (spec: agent-loop-
     consent). AUTO/DENY decisions are audited; under --noninteractive an AUTO
     without a written audit line is void (fail-closed). Interactive ASK needs
-    no extra consent: the operator's TTY invocation (plain runs) or the
-    explicit Proceed? (-a) already happened."""
+    no extra consent because the consent dialog already said merge (spec:
+    consent-dialogue D1; legacy Proceed? on question-free -a runs)."""
     mode_dict = asdict(mode)
     tiers = tuple(sorted({e.tier for e in plan.entries})) if plan is not None else ()
     variant = gate_mod.Variant(
@@ -107,6 +107,70 @@ def _mutation_gate(mode, plan, *, audit_path=gate_mod.AUDIT_PATH, audit_fn=gate_
     if verdict == gate_mod.DENY:
         return False, reason
     return True, reason
+
+
+def _establish_protection(
+    run, plan, mode, *, runs_dir, protect_fn=None, cleanup_fn=None, confirm_fn=confirm
+) -> tuple[Protection, int | None]:
+    """Recovery point + failure handling (system-rollback D2/D4/D5), shared by
+    the question-free paths (protect before any question) and the interactive
+    consent flow (protect AFTER consent, spec: consent-dialogue D3). Second
+    value is an exit code to return, or None to proceed."""
+    if run.state == state.PLAN:
+        state.transition(run, state.PROTECT, runs_dir)
+    pfn = protect_fn or _default_protect
+    if run.protection:
+        prot = Protection(
+            run_id=run.run_id,
+            snapshot=run.protection.get("snapshot"),
+            archive_dir=run.protection.get("archive"),
+            notes=["reusing recovery point from earlier attempt"],
+        )
+    elif plan is not None and not snapshot_required(plan.entries):
+        # system-rollback: rest-tier-only queue gets no recovery point
+        prot = Protection(run_id=run.run_id)
+    else:
+        prot = pfn(run, plan)
+    for note in prot.notes:
+        print(ui.info(note), file=sys.stderr)
+    run.protection = {
+        "snapshot": prot.snapshot,
+        "archive": prot.archive_dir,
+        "failed": prot.failed,
+    }
+    state.save_run(run, runs_dir)
+
+    # D4: with an unresolvable plan tiers are unknown, and the spec demands
+    # protection exactly then — a failed snapshot aborts either way
+    if prot.failed and (plan is None or snapshot_required(plan.entries)):
+        queue = "an unresolvable queue" if plan is None else "a tier<=4 queue"
+        print(ui.err(f"FAILED to create a recovery point for {queue}."), file=sys.stderr)
+        if mode.noninteractive or not confirm_fn(
+            ui.prompt(
+                "emerge-ai: merge without recovery point is unsafe. Proceed anyway? [y/N] "
+            )
+        ):
+            print(ui.err("aborted: no recovery point."), file=sys.stderr)
+            for line in (cleanup_fn or rollback_mod.cleanup)(prot):
+                print(ui.ok(line), file=sys.stderr)  # D5: leave nothing behind
+            state.transition(run, state.DONE, runs_dir)
+            return prot, 5
+    return prot, None
+
+
+def _print_survive_hint(run, prot=None) -> None:
+    """Task 2.4 (consent-dialogue): an interrupted finish keeps the recovery
+    point — tell the operator where it is, how to undo and how to continue."""
+    point = None
+    if prot is not None and (prot.snapshot or prot.archive_dir):
+        point = prot.snapshot or prot.archive_dir
+    elif run.protection:
+        point = run.protection.get("snapshot") or run.protection.get("archive")
+    if point:
+        print(ui.warn(f"recovery point kept: {point} — "
+                      "'emerge-ai --rollback' undoes what this run changed"), file=sys.stderr)
+    print(ui.info(f"continue this run later: emerge-ai --resume {run.run_id}"),
+          file=sys.stderr)
 
 
 def _rollback_mode(
@@ -428,7 +492,8 @@ def _call_agent_fn(agent_fn, incident: dict, interactive: bool):
 
 
 def _maybe_agent(
-    run, config_path, agent_fn=None, show_reasoning=False, interactive: bool = False
+    run, config_path, agent_fn=None, show_reasoning=False, interactive: bool = False,
+    sandbox=None,
 ) -> str | None:
     if not run.incident:
         return None
@@ -454,6 +519,7 @@ def _maybe_agent(
             info = portage_compat.emerge_info()
             agent = IncidentAgent(
                 client,
+                sandbox,
                 context=collect_context(info, cfg.language),
                 journal_path=journal.JOURNAL_PATH,
             )
@@ -508,14 +574,16 @@ def _pkg_docs(sandbox, path: str) -> list[tuple[str, str]]:
     return [(r["url"], r["content"])]
 
 
-def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None, show_reasoning=False) -> None:
-    if not run.incident or run.incident.get("class") != "config-protect":
-        return
+def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None,
+              show_reasoning=False, paths=None) -> None:
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
         cfg = Config()
-    paths = etcupdate.detect(run.incident.get("stderr_tail", ""))
+    if paths is None:
+        if not run.incident or run.incident.get("class") != "config-protect":
+            return
+        paths = etcupdate.detect(run.incident.get("stderr_tail", ""))
     if not paths:
         return
     print(ui.warn("config-protect detected: " + ", ".join(paths)), file=sys.stderr)
@@ -777,6 +845,28 @@ def main(
             _journal_verified_fix(run, applied, plan_args)
 
     plan = None
+    cfg = None
+    tier_service = None
+    artifact_path = None
+    severity_slice = ""
+    verdict = None
+    # plan-triage (spec): the full plan-phase text is a run artifact on every
+    # rc == 0 plan phase, clean included; the deterministic verdict exists
+    # without an LLM and is stored before any enrichment can fail.
+    try:
+        artifact_path = state.plan_artifact_path(run, runs_dir)
+        os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+        with open(artifact_path, "w") as fh:
+            fh.write(ui.strip_ansi(output))
+        verdict = triage.scan(output, emerge_args)
+        run.triage = verdict.to_dict()
+        if verdict.degraded:
+            severity_slice = triage.build_slice(output, path=artifact_path)
+    except OSError as exc:  # an unwritable runs dir must not break emerge's flow
+        artifact_path = None
+        verdict = None
+        print(ui.warn(f"plan triage artifact not written: {exc}"), file=sys.stderr)
+    state.save_run(run, runs_dir)
     try:
         cfg = load_config(config_path)
         tier_service = _make_tier_service(cfg, cache_path=tiers_cache, show_reasoning=verbose)
@@ -792,12 +882,19 @@ def main(
             def summarize(messages, _c=_llm):
                 return _c.chat(messages)
 
-        print(plan_digest(plan, stream=plan_stream, summarize=summarize), file=plan_stream)
+        print(plan_digest(plan, stream=plan_stream, summarize=summarize,
+                          severity_slice=severity_slice), file=plan_stream)
         if is_mass_update(emerge_args, plan):
             for line in doctor_report(plan, stream=sys.stderr):
                 print(line, file=sys.stderr)
     except Exception as exc:  # enrichment must never break emerge's own flow
         print(ui.warn(f"plan enrichment skipped: {exc}"), file=sys.stderr)
+
+    if verdict is not None and verdict.degraded:
+        # the same advisory report in every mode, after the digest and before
+        # any question, protection or merge (spec: plan-triage)
+        for line in triage.render_report(verdict, artifact_path, for_pretend=pretend):
+            print(line, file=plan_stream)
 
     if pretend:
         if ask:
@@ -807,53 +904,124 @@ def main(
                 ui.info("--pretend takes precedence over --ask: plan shown, merge not started"),
                 file=sys.stderr,
             )
+        if verdict is not None and verdict.degraded and cfg is not None and cfg.endpoint:
+            # deep read-only analysis only on degradation (design D6): -p keeps
+            # zero questions (interactive=False -> ask_operator unavailable),
+            # touches nothing and cannot change the exit code
+            run.incident = triage.plan_incident(emerge_args, verdict, severity_slice,
+                                                log_path=artifact_path)
+            from emerge_ai.sandbox import DEFAULT_JAIL_ROOTS, Sandbox
+            sandbox = Sandbox(
+                roots=tuple(DEFAULT_JAIL_ROOTS)
+                + ((os.path.dirname(artifact_path),) if artifact_path else ())
+            )
+            _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose,
+                         interactive=False, sandbox=sandbox)
         state.transition(run, state.DONE, runs_dir)
         return 0
 
-    # --- mutation path: protection first (system-rollback spec, D2) ---
-    if run.state == state.PLAN:
-        state.transition(run, state.PROTECT, runs_dir)
-    pfn = protect_fn or _default_protect
-    if run.protection:
-        prot = Protection(
-            run_id=run.run_id,
-            snapshot=run.protection.get("snapshot"),
-            archive_dir=run.protection.get("archive"),
-            notes=["reusing recovery point from earlier attempt"],
-        )
-    elif plan is not None and not snapshot_required(plan.entries):
-        # system-rollback: rest-tier-only queue gets no recovery point
-        prot = Protection(run_id=run.run_id)
-    else:
-        prot = pfn(run, plan)
-    for note in prot.notes:
-        print(ui.info(note), file=sys.stderr)
-    run.protection = {
-        "snapshot": prot.snapshot,
-        "archive": prot.archive_dir,
-        "failed": prot.failed,
-    }
-    state.save_run(run, runs_dir)
+    # --- mutation path (spec: consent-dialogue D1/D3) ---
+    # Interactive runs answer ONE consent question before anything is created:
+    # consent -> protect -> merge. Question-free runs keep the historical order
+    # (protect first, then the -a Proceed? if there is no terminal to ask on).
+    if interactive:
+        consent_analyze = None
+        if cfg is not None and cfg.endpoint:
+            try:
+                consent_client = LLMClient(cfg, show_reasoning=verbose)
 
-    # D4: with an unresolvable plan tiers are unknown, and the spec demands
-    # protection exactly then — a failed snapshot aborts either way
-    if prot.failed and (plan is None or snapshot_required(plan.entries)):
-        queue = "an unresolvable queue" if plan is None else "a tier<=4 queue"
-        print(ui.err(f"FAILED to create a recovery point for {queue}."), file=sys.stderr)
-        if mode.noninteractive or not confirm(
-            ui.prompt(
-                "emerge-ai: merge without recovery point is unsafe. Proceed anyway? [y/N] "
+                def consent_analyze(text, specs, _c=consent_client):  # noqa: F811
+                    """Free-text -> model channel: comment + order by keys; the
+                    menu itself stays the whitelist's (design D8)."""
+                    try:
+                        resp = _c.chat(consent_mod.build_analysis_messages(specs, text))
+                        reply = ((resp.get("choices") or [{}])[0]
+                                 .get("message") or {}).get("content") or ""
+                    except LLMError as exc:
+                        return f"LLM analysis unavailable ({exc})", []
+                    return consent_mod.parse_analysis(reply)
+            except LLMError as exc:
+                print(ui.warn(f"{exc}; consent free-text falls back to the menu"),
+                      file=sys.stderr)
+
+        def _consent_execute(spec):
+            """Runs the typed action after the audit line (inside gate
+            .apply_variant): the whitelist interpreter stays the only writer."""
+            act = dict(spec.action or {})
+            if act.get("type") == "package-edit":
+                _apply_action(act, run=run, etc_dir=etc_dir)
+            elif act.get("type") == "etc-update":
+                _etc_flow(run, config_path,
+                          llm=consent_analyze is not None,
+                          show_reasoning=verbose, paths=[act["path"]])
+            run.consent_repairs.append({"variant": spec.key, "action": act})
+
+        def _consent_replan():
+            """Full re-resolve after an applied repair (task 1.4): fresh
+            pretend-plan + triage verdict, no digest, no LLM call."""
+            nonlocal plan
+            rc2, out2 = run_emerge_capturing(plan_args, emerge_binary=emerge_binary,
+                                             stdout_stream=sys.stderr)
+            if rc2 != 0:
+                print(ui.err(f"re-resolve after repair failed (emerge rc={rc2}); "
+                             "merge not attempted"), file=sys.stderr)
+                return rc2
+            plan = build_plan_from_output(out2, emerge_args, tier_service,
+                                          fallback=plan_fn)
+            run.plan = [asdict(e) for e in plan.entries]
+            verdict = triage.scan(out2, emerge_args)
+            run.triage = verdict.to_dict()
+            state.save_run(run, runs_dir)
+            print(ui.info("re-resolved after repair: plan "
+                          + ("still degraded" if verdict.degraded else "is clean now")),
+                  file=sys.stderr)
+            return None
+
+        while True:
+            specs, manual = consent_mod.menu_specs(run.triage, plan)
+            decision = consent_mod.run_dialog(
+                specs,
+                contract_block=consent_mod.protect_contract(
+                    plan, fs=rollback_mod.detect_root_fs(), run_id=run.run_id),
+                manual=manual,
+                mode=asdict(mode),
+                audit_path=audit_path or gate_mod.AUDIT_PATH,
+                echo=lambda s: print(s, file=plan_stream),
+                input_fn=input_fn,
+                analyze=consent_analyze,
+                execute=_consent_execute,
             )
-        ):
-            print(ui.err("aborted: no recovery point."), file=sys.stderr)
-            for line in (cleanup_fn or rollback_mod.cleanup)(prot):
-                print(ui.ok(line), file=sys.stderr)  # D5: leave nothing behind
-            state.transition(run, state.DONE, runs_dir)
-            return 5
+            status = decision["status"]
+            if status == "applied":
+                rc2 = _consent_replan()
+                if rc2:
+                    _print_survive_hint(run)
+                    return rc2
+                continue  # rebuilt menu from the fresh verdict — unlimited rounds
+            if status != "merge":
+                print(ui.info(decision.get("reason") or "aborted"), file=sys.stderr)
+                if ask:
+                    # 'n' equivalence with the legacy Proceed? (task 2.1):
+                    # exit code 0; no point existed yet, so there is nothing
+                    # to clean up (D3 keeps abort free of side effects)
+                    state.transition(run, state.DONE, runs_dir)
+                    return 0
+                state.save_run(run, runs_dir)  # run stays resumable: nothing ran
+                _print_survive_hint(run)
+                return 130
+            break  # merge consented -> recovery point now (D2 holds: still before merge)
+
+    # protection first for question-free runs; consent was already given interactively
+    prot, code = _establish_protection(
+        run, plan, mode, runs_dir=runs_dir,
+        protect_fn=protect_fn, cleanup_fn=cleanup_fn, confirm_fn=confirm_fn)
+    if code is not None:
+        return code
 
     queue_tiers = sorted({e.tier for e in plan.entries}) if plan is not None else []
     tiers_note = f" (queue tiers: {', '.join(map(str, queue_tiers))})" if queue_tiers else ""
-    if ask and not mode.noninteractive:
+    if ask and not interactive and not mode.noninteractive:
+        # -a without a terminal to run the dialog on: legacy one-shot Proceed?
         if not confirm(ui.prompt(f"Proceed?{tiers_note} [y/N] ")):
             print(ui.info("aborted by user."), file=sys.stderr)
             if prot.snapshot or prot.archive_dir:
@@ -877,40 +1045,54 @@ def main(
 
     merge_args = drop_flags(emerge_args, ASK_FLAGS + PRETEND_FLAGS)
     state.transition(run, state.MERGE, runs_dir)
-    rc, output = run_emerge_capturing(merge_args, emerge_binary=emerge_binary)
     applied = None  # last applied repair spec, if the repair loop ever runs
-    while rc != 0:  # failure -> agent -> consent gate -> apply -> retry (spec: agent-loop-consent)
-        run.incident = build_incident(rc, output, merge_args)
-        state.transition(run, state.INCIDENT, runs_dir)
-        proposal = _maybe_agent(
-            run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
-        )
-        run.agent_proposal = proposal
-        applied = None
-        if proposal is not None:
-            applied = _incident_flow(
-                run, mode, plan,
-                audit_path=audit_path or gate_mod.AUDIT_PATH,
-                etc_dir=etc_dir, gate_fn=gate_fn, input_fn=input_fn,
-                confirm_fn=confirm_fn,
-                interactive=interactive,
+    try:
+        rc, output = run_emerge_capturing(merge_args, emerge_binary=emerge_binary)
+        while rc != 0:  # failure -> agent -> consent gate -> apply -> retry (spec: agent-loop-consent)
+            run.incident = build_incident(rc, output, merge_args)
+            state.transition(run, state.INCIDENT, runs_dir)
+            proposal = _maybe_agent(
+                run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
             )
-        if applied is None:
-            break
-        state.transition(run, state.MERGE, runs_dir)  # INCIDENT -> MERGE exists
-        rc, output = run_emerge_capturing(
-            merge_args, emerge_binary=emerge_binary,
-            env=(applied.get("action") or {}).get("env"),
-        )
-        run.repair[-1]["retry_rc"] = rc
+            run.agent_proposal = proposal
+            applied = None
+            if proposal is not None:
+                applied = _incident_flow(
+                    run, mode, plan,
+                    audit_path=audit_path or gate_mod.AUDIT_PATH,
+                    etc_dir=etc_dir, gate_fn=gate_fn, input_fn=input_fn,
+                    confirm_fn=confirm_fn,
+                    interactive=interactive,
+                )
+            if applied is None:
+                break
+            state.transition(run, state.MERGE, runs_dir)  # INCIDENT -> MERGE exists
+            rc, output = run_emerge_capturing(
+                merge_args, emerge_binary=emerge_binary,
+                env=(applied.get("action") or {}).get("env"),
+            )
+            run.repair[-1]["retry_rc"] = rc
+    except KeyboardInterrupt:
+        # interrupted finish (task 2.4): the recovery point survives — say so
+        _print_survive_hint(run, prot)
+        state.save_run(run, runs_dir)
+        raise
     if rc == 0:
         if prot.snapshot or prot.archive_dir:
+            # task 2.4: name the point before it is auto-deleted with the run
+            point = prot.snapshot or prot.archive_dir
+            print(ui.ok(f"recovery point {point} — removed with the run; "
+                        "after a merged queue --rollback no longer applies"),
+                  file=sys.stderr)
             for line in (cleanup_fn or rollback_mod.cleanup)(prot):
                 print(ui.ok(line), file=sys.stderr)
         state.transition(run, state.DONE, runs_dir)
         _post_run_digest(run, output, config_path, runs_dir)
         if applied is not None:  # merge failure repaired -> the one entry (D1)
             _journal_verified_fix(run, applied, merge_args)
+        for rep in run.consent_repairs:  # consent fixes the merge just verified
+            _journal_verified_fix(run, {"key": rep["variant"], "action": rep["action"]},
+                                  merge_args)
     else:  # run stays in INCIDENT: advisory report, rollback offer, etc flow
         _offer_rollback(
             mode,

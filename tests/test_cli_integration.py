@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from emerge_ai import cli, state
+from emerge_ai import cli, llm, state
 from emerge_ai.flags import Mode
 from emerge_ai.plan import Plan, PlanEntry
 from emerge_ai.rollback import Protection
@@ -605,7 +605,8 @@ def test_plan_phase_llm_summary_with_endpoint(emerge_stub, ok_compat, monkeypatc
 
         def chat(self, messages):
             seen.append(messages)
-            return type("R", (), {"content": "watch the tier-1 rebuild"})()
+            return type("R", (), {"content": '{"summary": "watch the tier-1 rebuild",'
+                                             ' "findings": []}'})()
 
     monkeypatch.setattr(cli, "LLMClient", FakeClient)
     plan = Plan(entries=[PlanEntry("app-misc/foo-1.0", 1, "hint")])
@@ -615,6 +616,171 @@ def test_plan_phase_llm_summary_with_endpoint(emerge_stub, ok_compat, monkeypatc
     out = capsys.readouterr().out
     assert "llm summary:" in out and "watch the tier-1 rebuild" in out
     assert len(seen) == 1 and "plan briefer" in seen[0][0]["content"]
+
+
+def test_plan_digest_llm_plain_text_reply_is_dropped(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    """The digest contract is strict JSON: a plain-text reply is a schema failure,
+    the LLM block disappears while the deterministic core stays intact."""
+    binary, _ = emerge_stub
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"endpoint": "http://localhost:1/v1"}))
+    monkeypatch.setenv("EMERGE_AI_CONFIG", str(cfg))
+    monkeypatch.setattr(cli.LLMClient, "chat",
+                        lambda self, messages, **kw: llm.Response("The plan looks fine."),
+                        raising=True)
+    rc = cli.main(["app-misc/foo", "--pretend", "--no-color"],
+                  emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[]),
+                  agent_fn=lambda *a, **k: "should not be used", config_path=str(cfg))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "plan digest" in out
+    assert "llm summary" not in out
+
+
+def test_pretend_degraded_without_endpoint_deterministic_only(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    """No endpoint: the degraded report, candidates and the artifact are still
+    there, zero questions, rc 0, and no LLM client or agent is built (5.4)."""
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", (
+        "!!! Problems have been detected with your world file\n"
+        "!!! Please run emaint --fix world\n"
+        "WARNING: One or more updates/rebuilds have been skipped due to a "
+        "dependency conflict:\n"
+        "app-container/edk2-bin:0\n"
+        "Total: 0 packages\n"))
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text("{}")
+    monkeypatch.setenv("EMERGE_AI_CONFIG", str(cfg))
+
+    def no_client(cfg, show_reasoning=False):
+        raise AssertionError("LLMClient must not be built without endpoint")
+
+    monkeypatch.setattr(cli, "LLMClient", no_client)
+    seen_argv = []
+
+    def input_guard(prompt=""):
+        seen_argv.append(prompt)
+        raise AssertionError("must not ask in --pretend")
+
+    monkeypatch.setattr("builtins.input", input_guard)
+    rc = cli.main(["-uDN", "@world", "--pretend", "--no-color"],
+                  emerge_binary=binary, runs_dir=str(tmp_path),
+                  agent_fn=lambda *a, **k: "must not run", config_path=str(cfg))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "plan DEGRADED despite exit code 0" in out
+    assert "emaint --fix world" in out
+    assert not seen_argv
+
+    runs = list(tmp_path.glob("*.json"))
+    run = state.load_run(runs[0].stem, str(tmp_path))
+    assert run.triage["status"] == "degraded"
+    with open(state.plan_artifact_path(run, str(tmp_path))) as fh:
+        artifact = fh.read()
+    assert "STUB-OUT" in artifact and "world file" in artifact
+
+
+DEGRADED_STUB_ERR = (
+    "!!! Problems have been detected with your world file\n"
+    "!!! Please run emaint --fix world\n"
+    "WARNING: One or more updates/rebuilds have been skipped due to a "
+    "dependency conflict:\n"
+    "app-container/edk2-bin:0\n"
+    "Total: 0 packages\n")
+
+
+class _JsonDigestClient:
+    """Minimal endpoint double: answers the digest call with valid JSON."""
+
+    n = 0
+
+    def __init__(self, cfg, show_reasoning=False):
+        pass
+
+    def chat(self, messages, **kw):
+        _JsonDigestClient.n += 1
+        return llm.Response('{"summary": "nothing merges here", "findings": []}')
+
+
+def test_ask_degraded_plan_reports_before_merge(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    """Mutation mode keeps asking exactly as before: the degraded report is an
+    extra advisory block, «y» still merges (spec: plan-triage)."""
+    binary, calls = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", DEGRADED_STUB_ERR)
+    asked = []
+
+    def _input(prompt=""):
+        asked.append(prompt)
+        return "y"
+
+    monkeypatch.setattr(builtins, "input", _input)
+    rc = cli.main(["-a", "app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id))
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = captured.out  # -a shows plan material on stdout
+    assert "plan DEGRADED despite exit code 0" in out
+    assert "not executable by emerge-ai yet" in out
+    assert any("Proceed?" in p for p in asked)  # consent question unchanged
+    # the merge really ran: one call without any pretend flag
+    assert any(not any(a in ("--pretend", "-p") for a in c) for c in calls())
+
+
+def test_pretend_clean_plan_single_llm_call_and_no_agent(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    """A clean plan costs exactly one LLM call (the digest) and never reaches
+    the IncidentAgent, endpoint present (spec: plan-triage)."""
+    binary, _ = emerge_stub
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"endpoint": "http://localhost:1/v1", "model": "m"}))
+    monkeypatch.setattr(cli, "LLMClient", _JsonDigestClient)
+    _JsonDigestClient.n = 0
+    from emerge_ai import agent as agent_mod
+    monkeypatch.setattr(agent_mod, "IncidentAgent",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no agent for a clean plan")))
+    rc = cli.main(["-p", "app-misc/foo", "--no-color"], emerge_binary=binary,
+                  runs_dir=str(tmp_path), plan_fn=lambda a, s: Plan(
+                      entries=[PlanEntry("app-misc/foo-1.0", 3, "hint")]),
+                  agent_fn=lambda *a, **k: "no agent for a clean plan",
+                  config_path=str(cfg))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "plan digest" in out and "llm summary:" in out
+    assert "DEGRADED" not in out
+    assert _JsonDigestClient.n == 1
+
+
+def test_pretend_degraded_with_endpoint_runs_readonly_agent(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    """Deep analysis on degradation only: the agent gets the plan-degraded
+    incident with log_path, physically without questions; rc stays 0."""
+    binary, _ = emerge_stub
+    monkeypatch.setenv("EMERGE_STUB_ERR", DEGRADED_STUB_ERR)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"endpoint": "http://localhost:1/v1", "model": "m"}))
+    monkeypatch.setattr(cli, "LLMClient", _JsonDigestClient)
+    seen = {}
+
+    def agent_fn(incident, interactive=False):
+        seen["incident"] = incident
+        seen["interactive"] = interactive
+        return "jemalloc needs ~amd64"
+
+    monkeypatch.setattr(builtins, "input",
+                        lambda prompt="": (_ for _ in ()).throw(AssertionError("-p must not ask")))
+    rc = cli.main(["-p", "-uDN", "@world", "--no-color"], emerge_binary=binary,
+                  runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[]),
+                  agent_fn=agent_fn, config_path=str(cfg))
+    assert rc == 0
+    assert seen["interactive"] is False
+    inc = seen["incident"]
+    assert inc["class"] == "plan-degraded"
+    assert inc["returncode"] == 0
+    assert inc["log_path"].endswith("plan-output.txt")
+    assert any(f["kind"] == "world-file" for f in inc["findings"])
+    out = capsys.readouterr().out
+    assert "plan DEGRADED despite exit code 0" in out
 
 
 def test_plan_phase_no_llm_summary_without_endpoint(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
@@ -1091,11 +1257,12 @@ def test_repair_interactive_refusal_keeps_exit_code(repair_stub, ok_compat, monk
     _repair_agent(monkeypatch, tmp_path)
     monkeypatch.setenv("EMERGE_STUB_ERR", "io-error while merging")
     monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    answers = iter(["y", "q"])  # consent to merge first, refuse the repair variant
     rc = cli.main(
         ["sys-apps/thing", "--i-understand-the-risks"],
         emerge_binary=binary, runs_dir=str(tmp_path),
         plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]),
-        input_fn=lambda prompt="": "q", confirm_fn=lambda prompt="": pytest.fail("no ask"),
+        input_fn=lambda prompt="": next(answers), confirm_fn=lambda prompt="": pytest.fail("no ask"),
     )
     out, err = capsys.readouterr()
     assert rc == 1  # код последнего сбоя emerge
@@ -1188,3 +1355,153 @@ def test_typed_variants_whitelist_by_class():
     kw = typed_variants({"class": "keywords", "argv": []}, arch="amd64")
     assert [v["key"] for v in kw] == ["retry", "env-accept-keywords"]
     assert kw[1]["action"]["env"] == {"ACCEPT_KEYWORDS": "~amd64"}
+
+
+# --- consent dialog (spec: consent-dialogue, tasks 4.2) ---
+
+MASKED_STUB_ERR = ("!!! app-container/edk2-bin-2024:0 is masked by: "
+                   "package.accept_keywords, ~amd64 keyword required\n"
+                   "Total: 1 packages")
+
+
+def _consent_protect(sink):
+    def protect(run, plan):
+        sink.append("protect")
+        return Protection(run_id=run.run_id)
+
+    return protect
+
+
+def test_plain_interactive_consent_before_protect(emerge_stub, ok_compat, monkeypatch,
+                                                  tmp_path, capsys):
+    """BREAKING (task 2.2/2.3): the plain run asks now — and asks BEFORE the
+    recovery point exists."""
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    events = []
+
+    def _input(prompt=""):
+        events.append(("answer", prompt))
+        return "y"
+
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 1, "h")]),
+                  protect_fn=_consent_protect(events), input_fn=_input)
+    assert rc == 0
+    assert events[0][0] == "answer" and "Your choice" in events[0][1]
+    assert events[1] == "protect"
+    assert any(not any(a in ("--pretend", "-p") for a in c) for c in calls())
+    err = capsys.readouterr().err
+    assert "recovery point contract" in err  # contract shown in the question
+
+
+def test_plain_interactive_abort_changes_nothing(emerge_stub, ok_compat, monkeypatch,
+                                                 tmp_path, capsys):
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    protected = []
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 1, "h")]),
+                  protect_fn=_consent_protect(protected),
+                  input_fn=lambda prompt="": "q")
+    assert rc == 130  # deliberate nonzero abort, no merge ran
+    assert protected == []
+    assert calls() and all(any(a in ("--pretend", "-p") for a in c) for c in calls())
+    err = capsys.readouterr().err
+    assert "operator aborted; nothing changed" in err
+    assert "emerge-ai --resume" in err  # survive-the-session hint (task 2.4)
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["state"] != "DONE"  # resumable, not finished
+
+
+def test_consent_degraded_repair_reresolve_then_merge(ok_compat, monkeypatch,
+                                                      tmp_path, capsys):
+    """degraded -> typed fix from the menu -> re-resolve -> rebuilt menu ->
+    merge (task 1.4/4.2). The stub flips to clean once the accept_keywords
+    file the whitelist interpreter writes exists."""
+    stub = tmp_path / "emerge"
+    stub.write_text("""#!/usr/bin/env python3
+import os, sys
+log = os.environ.get("EMERGE_STUB_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(" ".join(sys.argv[1:]) + "\\n")
+print("[ebuild  N    ] app-misc/foo-1.0")
+print("Total: 1 packages")
+if not os.path.exists(os.environ.get("EMERGE_STUB_FIXFILE", "")):
+    print(os.environ["EMERGE_STUB_ERR"], file=sys.stderr)
+sys.exit(0)
+""")
+    stub.chmod(stub.stat().st_mode | 0o755)
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("EMERGE_STUB_LOG", str(log))
+    monkeypatch.setenv("EMERGE_STUB_ERR", MASKED_STUB_ERR)
+    etc = tmp_path / "etc"
+    monkeypatch.setenv("EMERGE_STUB_FIXFILE", str(etc / "package.accept_keywords"))
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    answers = iter(["1", "y"])  # menu item 1 = the typed accept_keywords fix
+    rc = cli.main(["app-misc/foo"], emerge_binary=str(stub), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=lambda prompt="": next(answers), etc_dir=str(etc))
+    assert rc == 0
+    written = (etc / "package.accept_keywords").read_text()
+    assert "=app-container/edk2-bin-2024 ~amd64" in written
+    calls = [line.split() for line in log.read_text().splitlines()]
+    assert len(calls) == 3  # plan, re-plan after repair, merge
+    assert not any(a in ("--pretend", "-p") for a in calls[-1])
+    err = capsys.readouterr().err
+    assert "re-resolved after repair: plan is clean now" in err
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["state"] == "DONE"
+    assert saved["consent_repairs"][0]["variant"] == "ak-app-container/edk2-bin-2024"
+
+
+def test_ask_interactive_consent_y_is_the_legacy_yes(emerge_stub, ok_compat,
+                                                     monkeypatch, tmp_path, capsys):
+    """-a equivalence (task 2.1): the dialog replaces Proceed?, 'y' still merges."""
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    rc = cli.main(["-a", "app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=lambda prompt="": "y")
+    assert rc == 0
+    assert any(not any(a in ("--pretend", "-p") for a in c) for c in calls())
+    out = capsys.readouterr().out  # -a keeps run material on stdout
+    assert "recovery point contract" in out
+    assert "merge the queue as shown" in out
+
+
+def test_ask_interactive_consent_n_keeps_zero_code(emerge_stub, ok_compat,
+                                                   monkeypatch, tmp_path, capsys):
+    """-a equivalence (task 2.1): abort exits 0 like the old 'n' — and creates
+    nothing (D3), so there is not even a point to clean up."""
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    protected = []
+    rc = cli.main(["-a", "app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=_consent_protect(protected),
+                  input_fn=lambda prompt="": "n")
+    assert rc == 0
+    assert protected == []
+    assert all(any(a in ("--pretend", "-p") for a in c) for c in calls())
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["state"] == "DONE"
+    assert "operator aborted" in capsys.readouterr().err
+
+
+def test_noninteractive_never_sees_the_consent_dialog(emerge_stub, ok_compat,
+                                                      monkeypatch, tmp_path):
+    binary, calls = emerge_stub
+
+    def no_input(prompt=""):
+        raise AssertionError("question-free runs must not be asked")
+
+    monkeypatch.setattr(builtins, "input", no_input)
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "app-misc/foo"],
+                  emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id))
+    assert rc == 0

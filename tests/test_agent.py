@@ -6,7 +6,6 @@ import re
 import pytest
 
 from emerge_ai.agent import (
-    MAX_ASK_QUESTIONS,
     IncidentAgent,
     validate_question,
 )
@@ -210,16 +209,18 @@ def test_ask_operator_second_question_same_turn_is_guarded(jail):
     assert any("one question at a time" in r for r in client.seen_tool_results)
 
 
-def test_ask_budget_three_questions_per_incident(jail):
+def test_ask_rounds_unlimited_operator_is_the_guard(jail):
+    # consent-plan-dialogue 3.2: no question budget — every round the operator
+    # may answer or leave; only EOF/quit (channel close) ends the questioning
     sb, log = jail
-    answers = [{"status": "answered", "free_text": f"a{i}"} for i in range(3)]
+    answers = [{"status": "answered", "free_text": f"a{i}"} for i in range(5)]
     channel = scripted_channel(*answers)
-    steps = [{"ask_operator": QUESTION} for _ in range(4)]
+    steps = [{"ask_operator": QUESTION} for _ in range(5)]
     client = ScriptedClient(steps)
-    agent = IncidentAgent(client, sb, rules="R", max_rounds=8, ask_channel=channel)
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=10, ask_channel=channel)
     agent.propose(incident(log), interactive=True)
-    assert len(channel.calls) == 3  # the fourth question is never shown
-    assert any('"limit"' in r and "ASSUMPTIONS:" in r for r in client.seen_tool_results)
+    assert len(channel.calls) == 5  # the fifth question is shown just like the first
+    assert not any('"limit"' in r for r in client.seen_tool_results)
 
 
 def test_ask_quit_closes_further_questions(jail):
@@ -637,8 +638,8 @@ def _live_ask_once(emerge_binary: str):
 
     # Generous loop limits: a small local model spends 10+ probes before it is
     # ready to ask, and the default MAX_TOOL_CALLS would answer its first
-    # ask_operator with "budget exhausted". The question budget (≤3) is separate
-    # and still asserted below.
+    # ask_operator with "budget exhausted". Question rounds are unlimited
+    # (consent-plan-dialogue 3.2); the operator's quit/EOF is the guard.
     agent = IncidentAgent(client, sb, max_rounds=16, max_tool_calls=24,
                           journal_path=None, ask_channel=channel)
     result = agent.propose(dict(OPERATOR_ONLY_INCIDENT), interactive=True)
@@ -646,8 +647,6 @@ def _live_ask_once(emerge_binary: str):
 
     assert result.proposal.strip(), "the run must still end with a proposal"
     assert asked, f"model did not ask the operator; trace: {trace_kinds}"
-    assert len(asked) <= MAX_ASK_QUESTIONS, "question budget exceeded"
-    assert trace_kinds.count("ask_operator") <= MAX_ASK_QUESTIONS
     question, options = asked[0]
     assert validate_question(question, options) == "", "invalid question schema"
     answer = result.trace[trace_kinds.index("ask_answer")][1]

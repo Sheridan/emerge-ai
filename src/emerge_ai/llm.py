@@ -46,6 +46,20 @@ class LimitExhausted(LLMError):
         self.messages = messages or []
 
 
+def try_structured(reply: str) -> dict | None:
+    """Extract the first JSON object from a model reply and parse it (the
+    shared schema-parsing seam for structured prompts, spec: run-reporting):
+    no object or invalid JSON -> None, never an exception."""
+    start, end = reply.find("{"), reply.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(reply[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 class LLMClient:
     def __init__(self, cfg: Config, timeout: float = 240.0, *, show_reasoning: bool = False):
         self.cfg = cfg

@@ -10,6 +10,10 @@ import re
 from emerge_ai import ui
 
 FAILURE_CLASSES: list[tuple[str, list[str]]] = [
+    ("plan-degraded", [
+        r"Problems have been detected with your world file",
+        r"WARNING:.*skipped due to",
+    ]),
     ("cycle", [
         r"Dependency loop #\d+",
         r"circular dependenc",
@@ -82,8 +86,10 @@ PHASE_MSG_RE = re.compile(r"failed \((\w+) phase\)")
 FALLBACK = "unknown"
 
 
-def classify(stderr_text: str) -> str:
+def classify(stderr_text: str, exclude: frozenset = frozenset()) -> str:
     for name, patterns in FAILURE_CLASSES:
+        if name in exclude:
+            continue
         for pat in patterns:
             if re.search(pat, stderr_text, re.IGNORECASE if name != "sandbox" else 0):
                 return name
@@ -113,10 +119,15 @@ def extract_phase(text: str, klass: str) -> str | None:
 
 
 def build_incident(
-    returncode: int, stderr_text: str, argv: list[str], tail_chars: int = 4000
+    returncode: int, stderr_text: str, argv: list[str], tail_chars: int = 4000,
+    log_path: str | None = None,
 ) -> dict:
     text = ui.strip_ansi(stderr_text)
     klass = classify(text)
+    if klass == "plan-degraded" and returncode != 0:
+        # plan-degraded is the rc==0 verdict (spec: plan-triage); a non-zero
+        # run showing the same evidence lines keeps its structural class
+        klass = classify(text, exclude=frozenset({"plan-degraded"}))
     cpv = extract_cpv(text)
     phase = extract_phase(text, klass)
     incident = {
@@ -126,6 +137,12 @@ def build_incident(
         "stderr_tail": text[-tail_chars:],
         "phase": phase,
     }
+    if klass == "plan-degraded":
+        # plan-triage D4: the degraded-plan incident references the full run
+        # artifact; the stderr_tail truncation is not applied to this class
+        incident["stderr_tail"] = text
+        if log_path:
+            incident["log_path"] = log_path
     if cpv:
         incident["cpv"] = cpv
         log_match = PHASE_RE.search(text)

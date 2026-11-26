@@ -50,6 +50,10 @@ class RunState:
     changelog: str | None = None
     rollback: str | None = None  # rollback channel outcome (wire-rollback-channel)
     repair: list = field(default_factory=list)  # applied repair cycles (wire-agent-apply-loop)
+    triage: dict | None = None  # plan-phase verdict (spec: plan-triage)
+    consent_repairs: list = field(default_factory=list)  # pre-merge consent fixes
+    # (spec: consent-dialogue; deliberately not in `repair` — REPAIR_LIMIT
+    #  counts the autonomous post-merge loop only)
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 
@@ -72,6 +76,13 @@ def transition(run: RunState, new_state: str, runs_dir: str | Path = RUNS_DIR) -
     run.state = new_state
     save_run(run, runs_dir)
     return run
+
+
+def plan_artifact_path(run: RunState, runs_dir: str | Path = RUNS_DIR) -> str:
+    """Where the full plan-phase text lives (spec: plan-triage, design D4): a
+    per-run subdirectory next to the flat state JSON; the state layout of
+    runs_dir itself is untouched."""
+    return str(Path(runs_dir) / run.run_id / "plan-output.txt")
 
 
 def save_run(run: RunState, runs_dir: str | Path = RUNS_DIR) -> Path:

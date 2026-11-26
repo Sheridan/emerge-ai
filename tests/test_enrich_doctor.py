@@ -94,7 +94,7 @@ def test_plan_digest_llm_summary_appends_after_core():
 
     def summarize(messages):
         calls.append(messages)
-        return _Resp("first line\nsecond line")
+        return _Resp('{"summary": "first line\\nsecond line", "findings": []}')
 
     digest = plan_digest(_plan(), estimate=None, summarize=summarize)
     assert digest.startswith(core)  # deterministic core byte-identical on top
@@ -102,7 +102,8 @@ def test_plan_digest_llm_summary_appends_after_core():
     assert digest.splitlines()[-2:] == ["  first line", "  second line"]
     assert calls[0][0]["role"] == "system"
     assert "never invent" in calls[0][0]["content"]
-    assert "plain text" in calls[0][0]["content"].lower()
+    # the digest contract is strict JSON on top of the plain-text rule
+    assert '"summary"' in calls[0][0]["content"]
 
 
 def test_plan_digest_llm_failure_degrades_to_core():

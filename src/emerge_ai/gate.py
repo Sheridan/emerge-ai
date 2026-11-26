@@ -90,6 +90,38 @@ def audit(entry: dict, path: str | Path = AUDIT_PATH) -> bool:
         return False  # audit must never mask the gate decision itself
 
 
+def apply_variant(
+    variant: Variant,
+    *,
+    mode: dict,
+    confirm_fn: Callable[[str], bool] = lambda prompt: False,
+    audit_path: str | Path = AUDIT_PATH,
+    echo=print,
+    confirm_required: bool = True,
+) -> dict:
+    """The execution core (single mutation point): autonomy matrix -> audit ->
+    action. Explicit menu choice elsewhere may skip the extra confirm (the
+    selection itself is the consent, spec: consent-dialogue D1); the audit
+    line is written either way. gate() and the consent dialog share this."""
+    verdict, reason = autonomy_decision(mode, variant)
+    echo(f"emerge-ai: autonomy: {reason}")
+    if verdict == DENY:
+        audit({"mode": mode, "variant": variant.key, "decision": "denied", "reason": reason},
+              audit_path)
+        return {"status": "denied", "variant": variant.key, "reason": reason, "exit": 6}
+    if verdict == ASK and confirm_required:
+        if not confirm_fn(f"Apply variant [{variant.key}] {variant.title}? [y/N] "):
+            audit({"mode": mode, "variant": variant.key, "decision": "declined"}, audit_path)
+            return {"status": "declined", "variant": variant.key}
+    audit(
+        {"mode": mode, "variant": variant.key, "kind": variant.kind, "decision": "apply",
+         "autonomy": verdict, "reason": reason},
+        audit_path,
+    )
+    variant.action()
+    return {"status": "applied", "variant": variant.key, "autonomy": verdict}
+
+
 def gate(
     variants: list[Variant],
     *,
@@ -133,20 +165,5 @@ def gate(
             last_error = f"invalid choice {answer!r}"
             continue
         variant = variants[int(answer) - 1]
-        verdict, reason = autonomy_decision(mode, variant)
-        echo(f"emerge-ai: autonomy: {reason}")
-        if verdict == DENY:
-            audit({"mode": mode, "variant": variant.key, "decision": "denied", "reason": reason},
-                  audit_path)
-            return {"status": "denied", "variant": variant.key, "reason": reason, "exit": 6}
-        if verdict == ASK:
-            if not confirm_fn(f"Apply variant [{variant.key}] {variant.title}? [y/N] "):
-                audit({"mode": mode, "variant": variant.key, "decision": "declined"}, audit_path)
-                return {"status": "declined", "variant": variant.key}
-        audit(
-            {"mode": mode, "variant": variant.key, "kind": variant.kind, "decision": "apply",
-             "autonomy": verdict, "reason": reason},
-            audit_path,
-        )
-        variant.action()
-        return {"status": "applied", "variant": variant.key, "autonomy": verdict}
+        return apply_variant(variant, mode=mode, confirm_fn=confirm_fn,
+                             audit_path=audit_path, echo=echo)
