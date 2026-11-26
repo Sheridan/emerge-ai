@@ -63,12 +63,68 @@ def test_menu_degraded_typed_variants_and_manual_advice():
     specs, manual = consent.menu_specs(verdict, PLAN_REST)
     keys = [s.key for s in specs]
     assert "ak-app-container/edk2-bin-2024" in keys and "merge" in keys
-    ak = next(s for s in specs if s.kind == "fix")
+    # spec: repair-actions — emaint --fix world is an executable command item
+    # now, carrying its backup + undo wording in the consent detail
+    em = next(s for s in specs if s.key == "emaint-world")
+    assert em.action == {"type": "command", "name": "emaint-fix-world", "slots": {}}
+    assert any("world.emerge-ai." in line for line in em.detail)  # the backup copy
+    assert any(line.startswith("undo:") for line in em.detail)
+    ak = next(s for s in specs if s.key.startswith("ak-"))
     assert ak.action["type"] == "package-edit"
     assert ak.action["lines"] == ["=app-container/edk2-bin-2024 ~amd64"]
+    assert any(line.startswith("undo:") for line in ak.detail)
     merge = next(s for s in specs if s.kind == "merge")
     assert "stay unresolved" in merge.title
-    assert any("emaint --fix world" in line for line in manual)  # advice, outside
+
+
+def test_menu_four_findings_four_executable_variants():
+    """Task 5.3 end-to-end of the menu layer: the degraded plan (masked +
+    conflict + world-file + config-updating) yields four executable consent
+    items — keyword edit, deselect, emaint fix, etc-update."""
+    out = ("!!! Problems have been detected with your world file\n"
+           "!!! Please run emaint --fix world\n"
+           "WARNING: One or more updates/rebuilds have been skipped due to a "
+           "dependency conflict:\n"
+           "app-container/edk2-bin:0\n"
+           "  (app-container/edk2-bin-20240509-r1:0/0::gentoo, ebuild scheduled "
+           "for merge) conflicts with\n"
+           "    (app-emulation/qemu-8.2.0-r5:0/0::gentoo, installed) which blocks "
+           "app-container/edk2-bin\n"
+           "    (dev-libs/jemalloc-5.4.0-r2:0/0::gentoo, masked by: ~amd64 keyword)\n"
+           " * IMPORTANT: config file '/etc/portage/portage/lto' needs updating - "
+           "please use 'etc-update'\n\nTotal: 0 packages\n")
+    verdict = triage.scan(out, ["emerge", "-uDN", "@world"])
+    specs, manual = consent.menu_specs(verdict, PLAN_REST,
+                                       world=["app-container/edk2-bin"])
+    fixes = [s for s in specs if s.kind == "fix"]
+    types = {s.action["type"] for s in fixes}
+    names = {s.action.get("name") for s in fixes if s.action["type"] == "command"}
+    assert types == {"package-edit", "etc-update", "command"}
+    assert names == {"emaint-fix-world", "emerge-deselect"}
+    assert all(any(line.startswith("undo:") or "pre-emerge-ai" in line
+                   for line in s.detail) for s in fixes)  # every item says undo
+
+
+def test_menu_deselect_requires_world_membership():
+    """Task 1.2: a deselect only enters the menu when its atom is a @world
+    member; otherwise it is manual advice — never a stale executable."""
+    verdict = _verdict(triage.Finding(
+        "conflict", "dev-libs/jemalloc",
+        "!!! (dev-libs/jemalloc-5.4.0-r2, installed) blocks app-misc/x", 3))
+    specs, manual = consent.menu_specs(verdict, PLAN_REST, world=["dev-libs/jemalloc"])
+    ds = next(s for s in specs if s.key == "deselect-dev-libs/jemalloc")
+    assert ds.action == {"type": "command", "name": "emerge-deselect",
+                         "slots": {"atom": "dev-libs/jemalloc"}}
+    assert ds.tiers == (1,)
+    assert "undo: emerge --noreplace dev-libs/jemalloc" in ds.detail
+    assert not any("deselect" in line for line in manual)
+
+    specs, manual = consent.menu_specs(verdict, PLAN_REST, world=["app-misc/other"])
+    assert not any(s.key.startswith("deselect") for s in specs)
+    assert any("emerge --deselect dev-libs/jemalloc" in line for line in manual)
+    # no world list at all (unreadable) -> advice, like before the whitelist
+    specs, manual = consent.menu_specs(verdict, PLAN_REST, world=None)
+    assert not any(s.key.startswith("deselect") for s in specs)
 
 
 def test_menu_verdict_dict_roundtrip_matches_object():

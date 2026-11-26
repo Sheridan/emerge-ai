@@ -17,7 +17,7 @@ from emerge_ai.config import Config, ConfigError, load_config
 from emerge_ai.doctor import doctor_report, is_mass_update
 from emerge_ai.enrich import plan_digest
 from emerge_ai.flags import OWN_FLAG_HELP, parse_own_flags
-from emerge_ai import changelog, config_edit, consent as consent_mod, digest, etcupdate, journal, triage
+from emerge_ai import changelog, config_edit, consent as consent_mod, digest, etcupdate, journal, news as news_mod, triage, whitelist
 from emerge_ai import gate as gate_mod, init_check
 from emerge_ai import overlay as overlay_mod
 from emerge_ai.incident import build_incident
@@ -292,6 +292,16 @@ def _offer_rollback(
 REPAIR_LIMIT = 2  # apply->retry cycles per run (spec: agent-loop-consent)
 
 
+def _read_world() -> list | None:
+    """Best-effort @world atoms for the first validation pass (task 1.2):
+    None when the world file is unreadable — membership-dependent variants
+    (deselect) then stay advice, never a stale menu entry."""
+    try:
+        return portage_compat.world_atoms()
+    except portage_compat.PortageUnavailable:
+        return None
+
+
 def _variant_tiers(spec: dict, plan) -> tuple:
     """Risk tier of a whitelist variant: the queue/packages it touches when
     known, conservative (1) when the plan or the target is unknown."""
@@ -300,6 +310,19 @@ def _variant_tiers(spec: dict, plan) -> tuple:
     if plan is None:
         return (1,)
     action = spec.get("action") or {}
+    if action.get("type") == "command":
+        # emaint world: whole-set metadata; deselect: the named world member,
+        # resolved through the plan when it is part of the queue
+        from emerge_ai.tiers import package_of as _pk
+        atom = (action.get("slots") or {}).get("atom")
+        if action.get("name") == "emerge-deselect" and atom:
+            key = _pk(atom)
+            tiers = [e.tier for e in plan.entries if package_of(e.cpv) == key]
+            if tiers:
+                return (max(tiers),)
+        return (1,)
+    if action.get("type") == "etc-update":
+        return (1,)  # an arbitrary config file: no plan mapping, be cautious
     keys = set()
     if action.get("type") == "overlay-copy":
         keys.add(package_of(action["cpv"]))
@@ -309,12 +332,25 @@ def _variant_tiers(spec: dict, plan) -> tuple:
     return (max(tiers),) if tiers else (1,)
 
 
-def _apply_action(action: dict, *, run, etc_dir: str = "/etc/portage", overlay_root=None) -> None:
+def _apply_action(action: dict, *, run, etc_dir: str = "/etc/portage", overlay_root=None,
+                  emerge_binary: str | None = None, world_file: str | None = None,
+                  etc_apply=None) -> dict:
     """Whitelist interpreter — the only code mutating the system in the repair
-    loop; model output is never read here, actions are built by typed_variants."""
+    loop; model output is never read here, actions are built by typed_variants.
+    Command actions run through whitelist.execute: slot re-validation (TOCTOU),
+    per-run backup, pre-execution audit, fixed argv (spec: repair-actions)."""
     t = (action or {}).get("type", "retry")
     if t in ("retry", "env-retry"):
-        return  # the change happens through the retried emerge call
+        return {"status": "noop"}  # the change happens through the retried emerge call
+    if t == "command":
+        return whitelist.execute(
+            action["name"], action.get("slots") or {}, run_id=run.run_id,
+            binaries={"emerge": emerge_binary} if emerge_binary else None,
+            world_file=world_file)
+    if t == "etc-update":
+        if etc_apply is None:
+            raise ValueError("etc-update action without an etc channel in this context")
+        return etc_apply(action["path"])
     if t == "package-edit":
         # idempotent: existing (commented) line with the same directive is skipped
         for line in action["lines"]:
@@ -335,7 +371,7 @@ def _apply_action(action: dict, *, run, etc_dir: str = "/etc/portage", overlay_r
                 action["kind"], line, reason=action["reason"],
                 journal_id=run.run_id, etc_dir=etc_dir,
             )
-        return
+        return {"status": "applied"}
     if t == "overlay-copy":
         cpv = action["cpv"]
         cat, pn, _pv = overlay_mod._split_cpv(cpv)
@@ -346,7 +382,7 @@ def _apply_action(action: dict, *, run, etc_dir: str = "/etc/portage", overlay_r
         if overlay_root:
             kwargs["repo_root"] = overlay_root
         overlay_mod.add_package(cpv, source_dir=src, **kwargs)
-        return
+        return {"status": "applied"}
     raise ValueError(f"unknown repair action {t!r}")  # fail-closed, never executed
 
 
@@ -362,6 +398,8 @@ def _incident_flow(
     confirm_fn=confirm,
     input_fn=None,
     interactive: bool = False,
+    emerge_binary: str | None = None,
+    world: list | None | bool = True,
 ) -> dict | None:
     """Typed variants -> consent gate (autonomy matrix when not interactive:
     --noninteractive or no terminal) -> apply one. Returns the applied spec
@@ -378,12 +416,17 @@ def _incident_flow(
         return None
     from emerge_ai.agent import typed_variants
 
-    specs = typed_variants(run.incident or {})
+    specs = typed_variants(run.incident or {}, world=world if world is not True else _read_world())
     mode_dict = asdict(mode)
 
     def bound(spec):
         def _go():
-            _apply_action(spec["action"], run=run, etc_dir=etc_dir, overlay_root=overlay_root)
+            res = _apply_action(spec["action"], run=run, etc_dir=etc_dir,
+                                overlay_root=overlay_root, emerge_binary=emerge_binary)
+            if res.get("status") == "rejected":
+                # TOCTOU (D2): the slot validator refused at apply time — the
+                # warning was printed, nothing mutated, no cycle counted
+                return
             run.repair.append({"attempt": len(run.repair) + 1, "variant": spec["key"]})
             print(ui.ok(f"applied repair variant [{spec['key']}], retrying emerge"), file=sys.stderr)
 
@@ -575,7 +618,10 @@ def _pkg_docs(sandbox, path: str) -> list[tuple[str, str]]:
 
 
 def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None,
-              show_reasoning=False, paths=None) -> None:
+              show_reasoning=False, paths=None, require_after_build: bool = True) -> None:
+    """config-protect handling. `require_after_build=False` is the plan-phase
+    `needs updating` entry: an explicit consented finding, independent of the
+    etc_update_after_build policy flag (spec: etc-update-llm)."""
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
@@ -592,8 +638,10 @@ def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None
             print(etcupdate.show_diff(newp, stream=sys.stderr), file=sys.stderr)
         except OSError as exc:
             print(ui.warn(f"no diff for {newp}: {exc}"), file=sys.stderr)
-    if not llm or not cfg.etc_update_after_build:
-        print(ui.info("etc_update_after_build off or raw passthrough — showing diffs only, no actions"),
+    if not llm or (require_after_build and not cfg.etc_update_after_build):
+        reason = ("etc_update_after_build off or raw passthrough" if require_after_build
+                  else "no LLM available")
+        print(ui.info(f"{reason} — showing diffs only, no actions"),
               file=sys.stderr)
         return
     if client_factory is None:
@@ -831,6 +879,7 @@ def main(
                 etc_dir=etc_dir, gate_fn=gate_fn, input_fn=input_fn,
                 confirm_fn=confirm_fn,
                 interactive=interactive,
+                emerge_binary=emerge_binary,
             )
         if applied is None:
             state.save_run(run, runs_dir)
@@ -890,11 +939,35 @@ def main(
     except Exception as exc:  # enrichment must never break emerge's own flow
         print(ui.warn(f"plan enrichment skipped: {exc}"), file=sys.stderr)
 
+    world_atoms = _read_world()
     if verdict is not None and verdict.degraded:
         # the same advisory report in every mode, after the digest and before
-        # any question, protection or merge (spec: plan-triage)
-        for line in triage.render_report(verdict, artifact_path, for_pretend=pretend):
+        # any question, protection or merge (spec: plan-triage); `world` keeps
+        # report and consent menu in agreement about what is executable
+        for line in triage.render_report(verdict, artifact_path, for_pretend=pretend,
+                                         world=world_atoms):
             print(line, file=plan_stream)
+
+    if cfg is not None:
+        # unread GLSA/news: emerge-ai reads them itself and prints a digest —
+        # the operator is never sent to read them manually (spec: repair-actions)
+        try:
+            unread = news_mod.list_unread()
+            if unread:
+                news_summarize = None
+                if cfg.endpoint:
+                    _news_llm = LLMClient(cfg, show_reasoning=verbose)
+
+                    def news_summarize(messages, _c=_news_llm):
+                        return _c.chat(messages)
+
+                for line in news_mod.report_lines(
+                        unread, summarize=news_summarize,
+                        plan_atoms=[e.get("cpv", "") for e in (run.plan or [])],
+                        language=cfg.resolved_language()):
+                    print(line, file=plan_stream)
+        except Exception as exc:  # a broken eselect must not break the run
+            print(ui.warn(f"news digest skipped: {exc}"), file=sys.stderr)
 
     if pretend:
         if ask:
@@ -950,16 +1023,34 @@ def main(
             act = dict(spec.action or {})
             if act.get("type") == "package-edit":
                 _apply_action(act, run=run, etc_dir=etc_dir)
+            elif act.get("type") == "command":
+                res = _apply_action(act, run=run, emerge_binary=emerge_binary)
+                if res.get("status") != "executed":
+                    # TOCTOU rejection (D2): message already printed by the
+                    # validator, nothing mutated — not journaled as a fix
+                    return
+                run.consent_repairs.append({"variant": spec.key, "action": act})
+                for out_line in (res.get("output") or "").splitlines():
+                    print(ui.info(f"{spec.key}: {out_line}"), file=sys.stderr)
+                return
             elif act.get("type") == "etc-update":
+                pending = etcupdate.pending_for(act["path"])
+                if not pending:
+                    print(ui.info(f"no pending config update for {act['path']} "
+                                  "on disk — nothing applied"), file=sys.stderr)
+                    return
+                # plan-phase findings are NOT gated by etc_update_after_build
+                # (spec: etc-update-llm) — that flag governs post-build only
                 _etc_flow(run, config_path,
                           llm=consent_analyze is not None,
-                          show_reasoning=verbose, paths=[act["path"]])
+                          show_reasoning=verbose, paths=[pending],
+                          require_after_build=False)
             run.consent_repairs.append({"variant": spec.key, "action": act})
 
         def _consent_replan():
             """Full re-resolve after an applied repair (task 1.4): fresh
             pretend-plan + triage verdict, no digest, no LLM call."""
-            nonlocal plan
+            nonlocal plan, world_atoms
             rc2, out2 = run_emerge_capturing(plan_args, emerge_binary=emerge_binary,
                                              stdout_stream=sys.stderr)
             if rc2 != 0:
@@ -971,6 +1062,9 @@ def main(
             run.plan = [asdict(e) for e in plan.entries]
             verdict = triage.scan(out2, emerge_args)
             run.triage = verdict.to_dict()
+            # emaint --fix world / deselect rewrote the world file: the next
+            # menu validates its slots against the fresh membership
+            world_atoms = _read_world()
             state.save_run(run, runs_dir)
             print(ui.info("re-resolved after repair: plan "
                           + ("still degraded" if verdict.degraded else "is clean now")),
@@ -978,7 +1072,7 @@ def main(
             return None
 
         while True:
-            specs, manual = consent_mod.menu_specs(run.triage, plan)
+            specs, manual = consent_mod.menu_specs(run.triage, plan, world=world_atoms)
             decision = consent_mod.run_dialog(
                 specs,
                 contract_block=consent_mod.protect_contract(
@@ -1063,6 +1157,7 @@ def main(
                     etc_dir=etc_dir, gate_fn=gate_fn, input_fn=input_fn,
                     confirm_fn=confirm_fn,
                     interactive=interactive,
+                    emerge_binary=emerge_binary,
                 )
             if applied is None:
                 break

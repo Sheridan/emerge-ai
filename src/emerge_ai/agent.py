@@ -44,6 +44,17 @@ def limit_reason(reason: str) -> str:
     return ("the endpoint truncated the answer at the token/context limit"
             if reason == "tokens" else "the tool-round budget ran out")
 
+
+def _read_world() -> list | None:
+    """@world atoms for the membership validation of deselect variants;
+    None without a readable world file — those candidates stay advice."""
+    from emerge_ai import portage_compat
+
+    try:
+        return portage_compat.world_atoms()
+    except portage_compat.PortageUnavailable:
+        return None
+
 CLASS_SKELETONS: dict[str, str] = {
     "compile": (
         "The merge failed while building a package. Inspect the build log with "
@@ -68,9 +79,12 @@ CLASS_SKELETONS: dict[str, str] = {
         "The --pretend plan exited 0, yet the merge list is degraded: packages were "
         "skipped by conflicts or masks and the world/config files have problems. The "
         "full plan text is on disk at the incident's 'log_path' file — inspect the "
-        "evidence around each finding there with grep_log/read_file_window. Explain per "
-        "package why it is not merged and propose the minimal whitelist fix "
-        "(accept_keywords, mask, etc-update, world repair). Never propose an actual merge."
+        "evidence around each finding there with grep_log/read_file_window; verify the "
+        "world file with the check_world tool (read-only). Explain per package why it "
+        "is not merged and propose the minimal fix — executable options are ONLY the "
+        "whitelist variants (accept_keywords edit, emaint --fix world, emerge "
+        "--deselect of a world member, etc-update of one file); anything else is "
+        "advice text. Never propose an actual merge."
     ),
     "cycle": (
         "A dependency cycle was found. Locate the cycle lines in the output; propose "
@@ -155,6 +169,17 @@ TOOL_SPECS = [
                 },
                 "required": ["atoms"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_world",
+            "description": (
+                "Verify the world file: `emaint --check world` with a fixed argv "
+                "(read-only, never mutates). Use it on world-file findings."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 ]
@@ -281,12 +306,65 @@ class AgentResult:
 ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "i686": "x86"}
 
 
-def typed_variants(incident: dict, *, arch: str | None = None) -> list[dict]:
+def _finding_variants(findings: list, *, world: list[str] | None = None) -> list[dict]:
+    """Finding kind -> whitelist template (repair-actions D6): the slots are
+    taken from the finding's evidence (CPV, keyword, path), and the
+    membership pass filters deselects. Same keys/actions as consent.menu_specs
+    so the ask channel and the menu list identical executables."""
+    from emerge_ai import triage as triage_mod
+
+    rebuilt = [triage_mod.Finding(**f) if isinstance(f, dict) else f for f in findings]
+    out: list[dict] = []
+    seen_keys: set[str] = set()
+
+    def add(key: str, title: str, rationale: str, action: dict) -> None:
+        if key not in seen_keys:
+            seen_keys.add(key)
+            out.append({"key": key, "title": title, "rationale": rationale,
+                        "action": action})
+
+    for cand in triage_mod.candidates(rebuilt, world=world):
+        if not cand["executable"]:
+            continue
+        kind = cand["kind"]
+        if kind == "etc-update":
+            # the failure-loop gate has no etc channel wired (that flow lives
+            # in the consent dialog); offer it nowhere else
+            continue
+        if kind == "accept_keywords":
+            line = cand["text"]
+            cpv = line.split()[0].lstrip("=") if line.split() else "?"
+            add(f"ak-{cpv}",
+                f"add '{line}' to package.accept_keywords and re-plan",
+                "the masked candidate needs exactly this keyword",
+                {"type": "package-edit", "kind": "accept_keywords", "lines": [line],
+                 "reason": "emerge-ai repair (degraded plan finding)"})
+        elif kind == "emaint":
+            add("emaint-world",
+                "repair the world file (emaint --fix world)",
+                "emaint found problems in the world file",
+                {"type": "command", "name": "emaint-fix-world", "slots": {}})
+        elif kind == "deselect":
+            atom = cand.get("atom") or ""
+            add(f"deselect-{atom}",
+                f"remove {atom} from the world set (emerge --deselect {atom})",
+                "the conflicting atom is a world member and blocks the plan",
+                {"type": "command", "name": "emerge-deselect",
+                 "slots": {"atom": atom}})
+    return out
+
+
+def typed_variants(incident: dict, *, arch: str | None = None,
+                   world: list[str] | None = None) -> list[dict]:
     """Executable fix candidates for the consent gate (spec: agent-loop-consent).
     The model's text stays advisory: actions come from this whitelist, built
     deterministically from the incident class and argv/cpv — the model never
-    supplies commands. Every action is idempotent (append-if-absent, copy-if-
-    absent) and "retry" mutates nothing."""
+    supplies commands. For plan-degraded incidents the candidates are
+    findings-driven (spec: repair-actions D6): mask -> exact-CPV
+    accept_keywords, conflict -> keyword edit or deselect of a world member,
+    world-file -> emaint fix; slot values come from the finding evidence,
+    never from the model. Every action is idempotent (append-if-absent, copy-
+    if-absent) and "retry" mutates nothing."""
     import platform
 
     from emerge_ai.ladder import overlay_justified
@@ -302,6 +380,8 @@ def typed_variants(incident: dict, *, arch: str | None = None) -> list[dict]:
             "action": {"type": "retry"},
         }
     ]
+    if klass == "plan-degraded" and incident.get("findings"):
+        out.extend(_finding_variants(incident["findings"], world=world))
     if arch is None:
         arch = ARCHES.get(platform.machine(), "")
     if klass == "keywords" and arch:
@@ -487,12 +567,14 @@ class IncidentAgent:
                         list(args.get("extra_flags", [])),
                         dict(args.get("env_overrides", {}) or {}),
                     )
+                elif name == "check_world":
+                    out = self.sandbox.check_world()
                 else:
                     return {"error": f"unknown tool {name}"}
             except PermissionError as exc:
                 return {"error": f"denied by sandbox: {exc}"}
             text = json.dumps(out, ensure_ascii=False)
-            if name == "read_file_window" or name == "grep_log" or name == "web_fetch":
+            if name in ("read_file_window", "grep_log", "web_fetch", "check_world"):
                 text = injection.wrap_untrusted(text, source=name)
             cap = MAX_TOOL_RESULT_CHARS // 4 if self._narrow else MAX_TOOL_RESULT_CHARS
             return {"content": text[:cap]}
@@ -517,7 +599,7 @@ class IncidentAgent:
         if interactive:
             # the whitelist is shown so ask_operator options can quote real keys;
             # a model cannot execute what is not listed (spec: consent-dialogue 3.3)
-            listing = "\n".join(f"- {v['key']}: {v['title']}" for v in typed_variants(incident))
+            listing = "\n".join(f"- {v['key']}: {v['title']}" for v in typed_variants(incident, world=_read_world()))
             variant_note = (
                 "\n\n# EXECUTABLE VARIANTS (whitelist)\n"
                 + injection.wrap_untrusted(listing, source="variant-whitelist")
@@ -571,11 +653,11 @@ class IncidentAgent:
             except LLMError as exc:
                 result.proposal = f"agent stopped: {exc}"
                 result.stopped_reason = "budget-or-error"
-                result.variants = typed_variants(incident)
+                result.variants = typed_variants(incident, world=_read_world())
                 return result
         result.proposal = resp.content
         # whitelist variants travel with the advisory text (wire-agent-apply-loop)
-        result.variants = typed_variants(incident)
+        result.variants = typed_variants(incident, world=_read_world())
         return result
 
     def _limit_verdict(self, exc: LimitExhausted, incident: dict, interactive: bool,
@@ -645,7 +727,7 @@ class IncidentAgent:
             result.proposal = (f"(analysis stopped: the {exc.reason} limit was exhausted after "
                                f"{result.tool_calls_used} tool calls — no final answer was "
                                "produced from the evidence gathered so far)")
-        result.variants = typed_variants(incident)
+        result.variants = typed_variants(incident, world=_read_world())
 
     def _audit_limit(self, exc: LimitExhausted, incident: dict) -> None:
         """Non-interactive notification (D4): an audit line in the same

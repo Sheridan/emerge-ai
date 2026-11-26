@@ -18,7 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from emerge_ai import gate, injection, llm, rollback, triage, ui
+from emerge_ai import config_edit, gate, injection, llm, rollback, triage, ui
 
 MENU_CAP = 6  # the ask_operator option cap, reused for the consent menu
 
@@ -79,13 +79,15 @@ def _as_findings(verdict) -> list:
     return [triage.Finding(**f) if isinstance(f, dict) else f for f in findings]
 
 
-def menu_specs(verdict, plan) -> tuple[list[MenuSpec], list[str]]:
+def menu_specs(verdict, plan, *, world: list[str] | None = None) -> tuple[list[MenuSpec], list[str]]:
     """Deterministic menu (design D2/D6): clean plan -> [merge]; degraded ->
-    executable typed fixes (config_edit whitelist kinds + the etcupdate
-    channel) + [merge as-is] with the unresolved-finding count. Non-executable
-    advice never enters the list — it comes back as manual lines to print
-    outside it. Cap MENU_CAP; merge is never cut, the least specific fixes
-    fall off first."""
+    executable typed fixes (config_edit whitelist kinds, the etcupdate
+    channel, the whitelisted commands) + [merge as-is] with the
+    unresolved-finding count. `world` (atoms, read via portage_compat) is the
+    first validation pass of task 1.2 — a deselect whose atom left world is
+    not shown at all. Non-executable advice never enters the list — it comes
+    back as manual lines to print outside it. Cap MENU_CAP; merge is never
+    cut, the least specific fixes fall off first."""
     tiers = tuple(sorted({e.tier for e in plan.entries})) if plan is not None else ()
     n = len(plan.entries) if plan is not None else 0
     specs: list[MenuSpec] = []
@@ -107,10 +109,11 @@ def menu_specs(verdict, plan) -> tuple[list[MenuSpec], list[str]]:
                 key=f"etc-{path.rsplit('/', 1)[-1]}",
                 title=f"resolve the pending config update for {path}",
                 kind="fix",
-                detail=["the per-file etc-update dialogue still asks you per file"],
+                detail=["the per-file etc-update dialogue still asks you per file",
+                        "undo: the replaced file is kept as .pre-emerge-ai"],
                 action={"type": "etc-update", "path": path},
             ))
-        for cand in triage.candidates(findings):
+        for cand in triage.candidates(findings, world=world):
             if not cand["executable"]:
                 text = f"  manual (system cannot execute this yet): {cand['text']}"
                 if text not in manual:
@@ -122,10 +125,32 @@ def menu_specs(verdict, plan) -> tuple[list[MenuSpec], list[str]]:
                     key=f"ak-{cpv}",
                     title=f"add '{line}' to package.accept_keywords and re-plan",
                     kind="fix",
-                    detail=[f"edit: package.accept_keywords: {line}"],
+                    detail=[f"edit: package.accept_keywords: {line}",
+                            f"undo: {config_edit.undo_text('accept_keywords')}"],
                     action={"type": "package-edit", "kind": "accept_keywords",
                             "lines": [line],
                             "reason": "emerge-ai consent repair (degraded plan)"},
+                ))
+            elif cand["kind"] == "emaint":
+                specs.append(MenuSpec(
+                    key="emaint-world",
+                    title="repair the world file (emaint --fix world)",
+                    kind="fix",
+                    tiers=(1,),
+                    detail=["a world.emerge-ai.<run-id>.bak copy is created first",
+                            "undo: restore that copy over /var/lib/portage/world"],
+                    action={"type": "command", "name": "emaint-fix-world", "slots": {}},
+                ))
+            elif cand["kind"] == "deselect":
+                atom = cand.get("atom") or ""
+                specs.append(MenuSpec(
+                    key=f"deselect-{atom}",
+                    title=f"remove {atom} from the world set (emerge --deselect {atom})",
+                    kind="fix",
+                    tiers=(1,),
+                    detail=[f"undo: emerge --noreplace {atom}"],
+                    action={"type": "command", "name": "emerge-deselect",
+                            "slots": {"atom": atom}},
                 ))
         merged_desc = (f"merge the queue as shown ({n} package(s), tiers "
                        f"{_fmt_tiers(tiers)}; {len(findings)} finding(s) stay unresolved)")

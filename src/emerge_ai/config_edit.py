@@ -34,6 +34,43 @@ def apply_package_edit(
     return target
 
 
+UNDO_TABLE = {
+    kind: f"remove the run's lines (audit marker '# emerge-ai:') from package.{kind}"
+    for kind in ("use", "accept_keywords", "accept_license", "mask", "unmask", "env")
+}
+
+
+def undo_text(kind: str) -> str:
+    """Mechanically derived cancellation wording per config-edit kind (D3);
+    every consent formulation of a package-edit variant shows it."""
+    return UNDO_TABLE.get(kind) or f"remove the run's '# emerge-ai:' lines from package.{kind}"
+
+
+def _marker_hit(line: str, run_id: str) -> bool:
+    return "# emerge-ai:" in line and f" {run_id} " in f" {line} "
+
+
+def remove_by_run(run_id: str, *, etc_dir: str | Path = "/etc/portage") -> list[Path]:
+    """Undo of config-edit actions (D3): delete lines tagged with this run's
+    audit marker across package.* files. Idempotent — a second call touches
+    nothing; empty files are left empty, never removed."""
+    touched: list[Path] = []
+    if not run_id:
+        return touched
+    for target in sorted(Path(etc_dir).glob("package.*")):
+        if not target.is_file():
+            continue
+        try:
+            lines = target.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        kept = [ln for ln in lines if not _marker_hit(ln, run_id)]
+        if len(kept) != len(lines):
+            target.write_text("\n".join(kept) + ("\n" if kept else ""))
+            touched.append(target)
+    return touched
+
+
 def get_package_edit_lines(kind: str, *, etc_dir: str | Path = "/etc/portage") -> list[tuple[str, bool]]:
     """(line, is_emerge_ai_audit_comment) for review/GC."""
     target = Path(etc_dir) / f"package.{kind}"

@@ -98,3 +98,31 @@ def test_apply_user_patch_same_name_overwrites(tmp_path):
     assert (tmp_path / "cat" / "pn" / "50-x.diff").read_text() == (
         "# emerge-ai: 2026-11-24 - r\nnew\n"
     )
+
+
+# --- per-run undo (spec: repair-actions, design D3) ---------------------------
+
+def test_undo_text_exists_for_every_edit_kind():
+    for kind in ("use", "accept_keywords", "accept_license", "mask", "unmask", "env"):
+        text = config_edit.undo_text(kind)
+        assert text.startswith("remove the run's lines") and f"package.{kind}" in text
+
+
+def test_remove_by_run_deletes_only_that_run(tmp_path):
+    config_edit.apply_package_edit("accept_keywords", "=a/b-1 ~amd64", reason="r1",
+                                   journal_id="run77", etc_dir=tmp_path, now=D)
+    config_edit.apply_package_edit("use", "c/d static", reason="r2",
+                                   journal_id="run77", etc_dir=tmp_path, now=D)
+    config_edit.apply_package_edit("use", "e/f nls", reason="other",
+                                   journal_id="run99", etc_dir=tmp_path, now=D)
+    (tmp_path / "package.use").write_text(
+        "c/d static # emerge-ai: 2026-11-24 run77 r2\nuser/line keep me\n")
+
+    touched = config_edit.remove_by_run("run77", etc_dir=tmp_path)
+    assert {p.name for p in touched} == {"package.accept_keywords", "package.use"}
+    assert not (tmp_path / "package.accept_keywords").read_text().strip()
+    assert (tmp_path / "package.use").read_text() == "user/line keep me\n"
+    assert (tmp_path / "package.accept_keywords").exists()  # emptied, never removed
+    # idempotent: nothing more to remove, files untouched
+    assert config_edit.remove_by_run("run77", etc_dir=tmp_path) == []
+    assert config_edit.remove_by_run("", etc_dir=tmp_path) == []

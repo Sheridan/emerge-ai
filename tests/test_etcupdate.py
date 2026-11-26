@@ -104,6 +104,42 @@ def test_apply_atomic_backup_confirm_override(tmp_path):
     assert not list(tmp_path.glob(".emerge-ai-*"))
 
 
+def test_pending_for_finds_newest_cfg(tmp_path):
+    (tmp_path / "._cfg0000_sshd_config").write_text("A\n")
+    (tmp_path / "._cfg0001_sshd_config").write_text("B\n")
+    original = tmp_path / "sshd_config"
+    original.write_text("OLD\n")
+    assert etcupdate.pending_for(str(original)) == str(tmp_path / "._cfg0001_sshd_config")
+    assert etcupdate.pending_for(str(tmp_path / "absent.conf")) is None
+
+
+def test_apply_file_is_the_plan_phase_entry(tmp_path):
+    """spec: etc-update-llm — the plan-phase `needs updating` variant applies
+    a single pending file through the channel's native mutation point."""
+    cur = tmp_path / "foo.conf"
+    cur.write_text("OLD\n")
+    new = tmp_path / "._cfg0000_foo.conf"
+    new.write_text("NEW\n")
+    res = etcupdate.apply_file(str(new), {"action": "take-new", "reason": "r"},
+                               current_path=str(cur))
+    assert res["applied"] and cur.read_text() == "NEW\n"
+    assert (tmp_path / "foo.conf.pre-emerge-ai").read_text() == "OLD\n"
+
+
+def test_apply_file_for_original_no_pending_is_honest(tmp_path):
+    cur = tmp_path / "foo.conf"
+    cur.write_text("OLD\n")
+    res = etcupdate.apply_file_for_original(str(cur), lambda n, c: {"action": "keep-current"})
+    assert not res["applied"]
+    assert "no pending" in res["reason"]
+    assert cur.read_text() == "OLD\n"  # zero writes
+
+    (tmp_path / "._cfg0000_foo.conf").write_text("NEW\n")
+    res = etcupdate.apply_file_for_original(
+        str(cur), lambda n, c: {"action": "take-new", "reason": "r"})
+    assert res["applied"] and cur.read_text() == "NEW\n"
+
+
 def test_parse_override():
     llm = {"action": "take-new", "reason": "r", "citations": ["d"]}
     assert etcupdate.parse_override("", llm) is llm
@@ -170,6 +206,24 @@ def test_etc_flow_user_override(tmp_path, capsys):
     _etc_flow(run, str(cfg), llm=True,
               input_fn=lambda p: next(inputs), client_factory=lambda c, **kw: client)
     assert (etc / "sshd_config").read_text() == "MINE\n"
+
+
+def test_etc_flow_plan_phase_ignores_after_build_flag(tmp_path, capsys):
+    """spec: etc-update-llm — a consented plan-phase `needs updating` finding
+    is resolved per file regardless of etc_update_after_build; the flag keeps
+    governing the post-build flow only."""
+    cfg, etc = _cfg_dir(tmp_path, llm_flag=False)  # post-build channel OFF
+    merged = "Port 2222\nPermitRootLogin yes\nKexAlgorithms x\n"
+    client = FakeClient({"action": "merge", "reason": "keep admin port",
+                         "citations": ["sshd_config.5.txt: x"], "merged_text": merged})
+    run = type("R", (), {"incident": incident_for(etc)})()
+    _etc_flow(run, str(cfg), llm=True, input_fn=lambda p: "",
+              client_factory=lambda c, **kw: client,
+              paths=[str(etc / "._cfg0000_sshd_config")], require_after_build=False)
+    err = capsys.readouterr().err
+    assert "etc_update_after_build off" not in err
+    assert (etc / "sshd_config").read_text() == merged
+    assert not (etc / "._cfg0000_sshd_config").exists()
 
 
 def _package_use_dir(tmp_path):

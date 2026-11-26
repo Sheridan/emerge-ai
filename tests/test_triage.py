@@ -134,8 +134,25 @@ def test_candidates_split_executable_from_manual():
     assert by_kind["accept_keywords"]["text"] == "=dev-libs/jemalloc-5.4.0-r2 ~amd64"
     assert by_kind["etc-update"]["executable"] is True
     assert "/etc/portage/portage/lto" in by_kind["etc-update"]["text"]
-    assert by_kind["emaint"]["executable"] is False
+    # spec: repair-actions — emaint --fix world joined the executable whitelist
+    assert by_kind["emaint"]["executable"] is True
+    # deselect only executes for a @world member; without the world list it
+    # stays advice, and the conflict cpv here is not in the world file
+    assert by_kind["deselect"]["executable"] is False
     assert by_kind["world-review"]["executable"] is False
+
+
+def test_candidates_deselect_executable_for_world_member():
+    findings = [triage.Finding("conflict", "dev-libs/jemalloc",
+                               "!!! (dev-libs/jemalloc-5.4.0-r2, installed) blocks dev-foo/x", 0)]
+    cands = {c["kind"]: c for c in triage.candidates(findings, world=["dev-libs/jemalloc"])}
+    assert cands["deselect"]["executable"] is True
+    assert cands["deselect"]["atom"] == "dev-libs/jemalloc"
+    assert "world-review" not in cands
+    # a non-member stays advice
+    cands = {c["kind"]: c for c in triage.candidates(findings, world=["app-misc/other"])}
+    assert cands["deselect"]["executable"] is False
+    assert cands["world-review"]["executable"] is False
 
 
 def test_render_report_advisory_only_no_questions():

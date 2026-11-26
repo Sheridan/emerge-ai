@@ -71,6 +71,18 @@ def set_atoms(emerge_config, set_name: str) -> list[str]:
     return sorted(str(atom) for atom in atoms)
 
 
+def world_atoms(world_path: str = "/var/lib/portage/world") -> list[str]:
+    """Atoms listed in the world file (read-only; the file portage itself
+    writes). Slot validators go through this module, never through ad-hoc
+    readers (design D1/D2 of the thin adapter)."""
+    try:
+        with open(world_path) as fh:
+            text = fh.read()
+    except OSError as exc:
+        raise PortageUnavailable(f"cannot read world file {world_path}: {exc}") from exc
+    return [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+
+
 def _vdb_api():
     return load_portage().vartree().dbapi
 

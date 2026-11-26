@@ -111,3 +111,32 @@ def test_wrap_untrusted_markers_and_flag():
     assert "injection patterns" in wrapped
     plain = wrap_untrusted("harmless compile output", source="web_fetch")
     assert "injection patterns" not in plain
+
+
+# --- check_world (spec: repair-actions) ---------------------------------------
+
+def test_check_world_pins_the_fixed_argv(jail, monkeypatch):
+    import subprocess
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+
+        class P:
+            returncode, stdout, stderr = 0, "world check ok\n", ""
+
+        return P
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    res = jail.check_world()
+    assert calls == [["emaint", "--check", "world"]]
+    assert res["returncode"] == 0 and "world check ok" in res["output"]
+
+
+def test_emaint_stays_off_the_readonly_allowlist(jail):
+    # --fix would mutate: only the pinned check_world entry may invoke emaint
+    with pytest.raises(BinaryNotAllowed):
+        jail.run_readonly(["emaint", "--fix", "world"])
+    with pytest.raises(BinaryNotAllowed):
+        jail.run_readonly(["emaint", "--check", "world"])

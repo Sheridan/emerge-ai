@@ -5,8 +5,12 @@ import re
 
 import pytest
 
+from emerge_ai import agent
 from emerge_ai.agent import (
+    CLASS_SKELETONS,
+    TOOL_SPECS,
     IncidentAgent,
+    typed_variants,
     validate_question,
 )
 from emerge_ai.llm import LLMClient, Response, ToolCall
@@ -655,3 +659,35 @@ def _live_ask_once(emerge_binary: str):
     assert answer["choice"].split(" — ")[0] in chosen_labels, "answer must be a shown option"
     assert re.search("shaderc|glslang", result.proposal, re.IGNORECASE)
     assert "QUESTION:" not in result.proposal, "no marker lines any more"
+
+
+# --- findings-driven variants + check_world tool (spec: repair-actions) -------
+
+def test_check_world_tool_spec_and_skeleton_hint():
+    names = {t["function"]["name"] for t in TOOL_SPECS}
+    assert "check_world" in names
+    skeleton = CLASS_SKELETONS["plan-degraded"]
+    assert "check_world" in skeleton and "whitelist" in skeleton
+
+
+def test_typed_variants_findings_drive_whitelist_commands():
+    incident = {
+        "class": "plan-degraded", "argv": ["emerge", "-uDN", "@world"],
+        "findings": [
+            {"kind": "world-file", "cpv": None, "line_no": 3,
+             "evidence": "!!! Problems have been detected with your world file"},
+            {"kind": "conflict", "cpv": "dev-libs/jemalloc", "line_no": 5,
+             "evidence": "!!! (dev-libs/jemalloc-5.4.0-r2, installed) blocks x"},
+        ],
+    }
+    keys = {v["key"]: v for v in typed_variants(incident,
+                                                      world=["dev-libs/jemalloc"])}
+    assert keys["emaint-world"]["action"] == {
+        "type": "command", "name": "emaint-fix-world", "slots": {}}
+    assert keys["deselect-dev-libs/jemalloc"]["action"] == {
+        "type": "command", "name": "emerge-deselect",
+        "slots": {"atom": "dev-libs/jemalloc"}}
+    # the ask channel validates membership too: non-members never execute
+    keys = {v["key"] for v in typed_variants(incident, world=[])}
+    assert "deselect-dev-libs/jemalloc" not in keys
+    assert "emaint-world" in keys

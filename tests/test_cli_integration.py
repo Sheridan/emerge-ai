@@ -1,6 +1,7 @@
 import builtins
 import io
 import json
+import os
 import sys
 
 import pytest
@@ -1505,3 +1506,183 @@ def test_noninteractive_never_sees_the_consent_dialog(emerge_stub, ok_compat,
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
                   protect_fn=lambda run, plan: Protection(run_id=run.run_id))
     assert rc == 0
+
+
+# --- whitelisted commands via the consent menu (spec: repair-actions) ---------
+
+WORLD_STUB_ERR = ("!!! Problems have been detected with your world file\n"
+                  "!!! Please run emaint --fix world\n")
+
+FLIP_STUB = """#!/usr/bin/env python3
+import os, sys
+log = os.environ.get("EMERGE_STUB_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(" ".join(sys.argv[1:]) + "\\n")
+print("[ebuild  N    ] app-misc/foo-1.0")
+print("Total: 1 packages")
+if not os.path.exists(os.environ.get("EMERGE_STUB_FIXFILE", "")):
+    print(os.environ["EMERGE_STUB_ERR"], file=sys.stderr)
+sys.exit(0)
+"""
+
+
+def _flip_stub(tmp_path, monkeypatch, err):
+    stub = tmp_path / "emerge"
+    stub.write_text(FLIP_STUB)
+    stub.chmod(stub.stat().st_mode | 0o755)
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("EMERGE_STUB_LOG", str(log))
+    monkeypatch.setenv("EMERGE_STUB_ERR", err)
+    fixfile = tmp_path / "fixed-marker"
+    monkeypatch.setenv("EMERGE_STUB_FIXFILE", str(fixfile))
+    return str(stub), log, fixfile
+
+
+def test_consent_degraded_emaint_world_fix_executes(ok_compat, monkeypatch,
+                                                    tmp_path, capsys):
+    """emaint --fix world as a consent menu command (tasks 5.x): world backup
+    first, fixed argv, pre-execution audit line, repair journaled, clean
+    re-plan follows."""
+    from emerge_ai import gate as gate_mod, whitelist
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    emaint = bin_dir / "emaint"
+    emaint.write_text("#!/usr/bin/env python3\n"
+                      "import os, sys\n"
+                      "with open(os.environ['EMAINT_STUB_LOG'], 'a') as f:\n"
+                      "    f.write(' '.join(sys.argv[1:]) + '\\n')\n"
+                      "open(os.environ['EMERGE_STUB_FIXFILE'], 'a').close()\n"
+                      "print('>> Regenerating world file dependencies... done!')\n")
+    emaint.chmod(emaint.stat().st_mode | 0o755)
+    elog = tmp_path / "emaint.log"
+    monkeypatch.setenv("EMAINT_STUB_LOG", str(elog))
+    monkeypatch.setenv("PATH", str(bin_dir) + ":" + os.environ["PATH"])
+
+    binary, _, _ = _flip_stub(tmp_path, monkeypatch, WORLD_STUB_ERR)
+    world = tmp_path / "world"
+    world.write_text("app-misc/foo\n")
+    monkeypatch.setattr(whitelist, "WORLD_FILE", str(world))
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+
+    answers = iter(["1", "y"])  # 1 = emaint fix, then yes to the clean merge
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=lambda prompt="": next(answers))
+    assert rc == 0
+    assert elog.read_text().strip() == "--fix world"  # fixed argv, nothing else
+    backups = list(tmp_path.glob("world.emerge-ai.*.bak"))
+    assert backups and "app-misc/foo" in backups[0].read_text()
+
+    audit = [json.loads(ln) for ln in
+             open(gate_mod.AUDIT_PATH).read().splitlines() if ln.strip()]
+    cmd = next(e for e in audit if e.get("decision") == "command-execute")
+    assert cmd["argv"] == ["emaint", "--fix", "world"]
+    assert cmd["backup"] == str(backups[0]) and "restore" in cmd["undo"]
+
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["consent_repairs"][0]["variant"] == "emaint-world"
+    assert saved["state"] == "DONE"
+    err = capsys.readouterr().err
+    assert "re-resolved after repair: plan is clean now" in err
+    assert "Regenerating world file dependencies" in err  # command output surfaced
+
+
+def test_noninteractive_never_executes_world_fix_command(ok_compat, monkeypatch,
+                                                         tmp_path, capsys):
+    """The new actions obey the autonomy matrix: question-free runs keep them
+    at advice — emaint is never executed without an operator."""
+    from emerge_ai import whitelist
+
+    binary, calls, fixfile = _flip_stub(tmp_path, monkeypatch, WORLD_STUB_ERR)
+    world = tmp_path / "world"
+    world.write_text("app-misc/foo\n")
+    monkeypatch.setattr(whitelist, "WORLD_FILE", str(world))
+
+    def no_input(prompt=""):
+        raise AssertionError("question-free runs must not be asked")
+
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=no_input)
+    assert rc == 0
+    assert not fixfile.exists()  # the (stub) world fix never ran
+    assert not list(tmp_path.glob("world.emerge-ai.*.bak"))  # nor its backup
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved.get("consent_repairs", []) == []
+
+
+# --- news digest in the run report (spec: repair-actions, design D5) ----------
+
+ESELECT_STUB = """#!/usr/bin/env python3
+import sys
+if sys.argv[2] == "list":
+    print(" [1: 1 of 1 ] GLSA 202611-01 [2026-11-20] (unread)")
+else:
+    print("Affected: dev-libs/openssl. Multiple vulnerabilities, upgrade soon.")
+sys.exit(0)
+"""
+
+
+def _eselect_stub(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    eselect = bin_dir / "eselect"
+    eselect.write_text(ESELECT_STUB)
+    eselect.chmod(eselect.stat().st_mode | 0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + ":" + os.environ["PATH"])
+
+
+def test_pretend_report_carries_news_digest(emerge_stub, ok_compat, monkeypatch,
+                                            tmp_path, capsys):
+    """No endpoint: the digest is still produced (deterministic) — the GLSA
+    id/title is in the report and nobody is sent to read the news manually."""
+    binary, calls = emerge_stub
+    _eselect_stub(tmp_path, monkeypatch)
+    rc = cli.main(["app-misc/foo", "--pretend"], emerge_binary=binary,
+                  runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "news digest: 1 unread item(s)" in out
+    assert "GLSA 202611-01" in out and "2026-11-20" in out
+    assert "eselect news read" not in out and "manually" not in out
+
+
+def test_mutation_report_carries_llm_news_digest(emerge_stub, ok_compat, monkeypatch,
+                                                 tmp_path, capsys):
+    """With an endpoint the model digest (from the read bodies) replaces the
+    raw title list in the mutation-mode report."""
+    binary, calls = emerge_stub
+    _eselect_stub(tmp_path, monkeypatch)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text(json.dumps({"endpoint": "http://endpoint.invalid/v1",
+                               "model": "m"}))
+    monkeypatch.setenv("EMERGE_AI_CONFIG", str(cfg))
+
+    seen = []
+
+    class FakeNewsClient:
+        def __init__(self, cfg, show_reasoning=False):
+            pass
+
+        def chat(self, messages, **kw):
+            seen.append(messages)
+            return {"choices": [{"message": {
+                "content": "item 1: OpenSSL vulns, affects dev-libs/openssl, high"}}]}
+
+    monkeypatch.setattr(cli, "LLMClient", FakeNewsClient)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "y")
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id))
+    assert rc == 0
+    captured = capsys.readouterr()
+    captured_err = captured.out + captured.err
+    assert "news digest: 1 unread item(s)" in captured_err
+    assert "OpenSSL vulns" in captured_err  # the digest, not just the title
+    news_calls = [m for m in seen if any("news briefer" in str(x) for x in m)]
+    assert news_calls and "Affected: dev-libs/openssl" in news_calls[0][1]["content"]

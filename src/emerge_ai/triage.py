@@ -222,18 +222,28 @@ def plan_incident(argv: list[str], verdict: Verdict, severity_slice: str = "",
 _KEYWORD_RE = re.compile(r"(~[A-Za-z0-9_.-]+)")
 
 
-def candidates(findings: list[Finding]) -> list[dict]:
-    """Fix candidates split by what the apply channel can execute TODAY
-    (design D5): the config_edit package-file kinds and the etcupdate channel;
-    everything else is listed as not executable yet — whitelist-repair-commands
-    closes that gap."""
+def _cat_pkg(atom: str) -> str:
+    """cat/pkg key of an atom — tiers.package_of, the same comparison key the
+    tier machinery and the whitelist use for @world membership."""
+    from emerge_ai.tiers import package_of
+
+    return package_of(atom)
+
+
+def candidates(findings: list[Finding], *, world: list[str] | None = None) -> list[dict]:
+    """Fix candidates split by what the apply channel can execute (spec:
+    repair-actions): config_edit kinds, the etcupdate channel and the
+    whitelisted commands (emaint world fix, emerge --deselect). A deselect is
+    executable only for an atom that is a member of @world — pass `world` to
+    check it; without the list the variant stays advice (the menu never shows
+    a stale entry). Truly uncovered kinds remain advice lines."""
     out: list[dict] = []
     seen: set[str] = set()
 
-    def add(kind: str, text: str, executable: bool) -> None:
+    def add(kind: str, text: str, executable: bool, **extra) -> None:
         if text not in seen:
             seen.add(text)
-            out.append({"kind": kind, "text": text, "executable": executable})
+            out.append({"kind": kind, "text": text, "executable": executable, **extra})
 
     for f in findings:
         if f.kind == "masked":
@@ -244,24 +254,42 @@ def candidates(findings: list[Finding]) -> list[dict]:
                 add("mask", f"review the mask hiding {f.cpv or 'the candidate'}", False)
         elif f.kind == "config-updating":
             m = CONFIG_UPDATING_RE.search(f.evidence)
+            path = m.group(1) if m else None
             add("etc-update",
-                f"resolve the pending config update for {m.group(1) if m else 'a config file'}",
-                True)
+                f"resolve the pending config update for {path or 'a config file'}",
+                True, **({"path": path} if path else {}))
         elif f.kind == "world-file":
-            add("emaint", "repair the world file (emaint --fix world)", False)
+            add("emaint", "repair the world file (emaint --fix world)", True)
         elif f.kind in ("dep-conflict", "conflict"):
-            add("world-review",
-                f"review the conflict around {f.cpv or 'the skipped package'} "
-                "(keyword/use change or deselect)",
-                False)
+            kw = _KEYWORD_RE.search(f.evidence)
+            if f.cpv and kw and "keyword" in f.evidence:
+                add("accept_keywords", f"={f.cpv} {kw.group(1)}", True)
+            if f.cpv:
+                in_world = world is not None and any(
+                    _cat_pkg(e) == _cat_pkg(f.cpv) for e in world)
+                add("deselect",
+                    f"remove {f.cpv} from the world set (emerge --deselect {f.cpv})",
+                    in_world, atom=f.cpv)
+                if not in_world:
+                    add("world-review",
+                        f"review the conflict around {f.cpv} "
+                        "(keyword/use change or deselect)",
+                        False)
+            else:
+                add("world-review",
+                    "review the conflict (keyword/use change or deselect)",
+                    False)
     return out
 
 
 def render_report(verdict: Verdict | None, plan_output: str | None = None,
-                  for_pretend: bool = False) -> list[str]:
+                  for_pretend: bool = False,
+                  world: list[str] | None = None) -> list[str]:
     """The advisory report shared by --pretend and the mutation modes (D6):
     what happened, what will NOT be merged, candidate whitelist actions; never
-    a question, never an action."""
+    a question, never an action. `world` is the same membership list the
+    consent menu validates with, so report and menu agree on what is
+    executable."""
     if verdict is None or not verdict.degraded:
         return []
     lines = [
@@ -271,7 +299,7 @@ def render_report(verdict: Verdict | None, plan_output: str | None = None,
     for f in verdict.findings:
         target = f" {f.cpv}" if f.cpv else ""
         lines.append(f"  [{f.kind}] line {f.line_no + 1}:{target} {f.evidence}")
-    cands = candidates(verdict.findings)
+    cands = candidates(verdict.findings, world=world)
     executable = [c for c in cands if c["executable"]]
     blocked = [c for c in cands if not c["executable"]]
     if executable:

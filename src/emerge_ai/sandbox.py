@@ -113,6 +113,18 @@ class Sandbox:
         out = (proc.stdout or "") + (proc.stderr or "")
         return {"returncode": proc.returncode, "output": out[: self.max_bytes]}
 
+    def check_world(self) -> dict:
+        """`emaint --check world` — the fixed read-only argv (spec:
+        repair-actions). emaint is NOT on the run_readonly allowlist (its
+        --fix mutates), so this dedicated entry pins the argv itself."""
+        argv = ["emaint", "--check", "world"]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=120.0)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"error": str(exc), "argv": argv}
+        out = ui.strip_ansi((proc.stdout or "") + (proc.stderr or ""))
+        return {"returncode": proc.returncode, "argv": argv, "output": out[: self.max_bytes]}
+
     def journal_search(self, *args: str, max_lines: int = 200) -> dict:
         argv = ["journalctl", "--no-pager", "-o", "short-iso", *args]
         result = self.run_readonly(argv)

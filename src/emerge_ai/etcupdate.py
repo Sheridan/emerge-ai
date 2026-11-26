@@ -40,6 +40,42 @@ def original_of(new_path: str) -> str:
     return os.path.join(head, f"{m.group(1)}{m.group(2)}") if m else new_path
 
 
+def pending_for(original_path: str) -> str | None:
+    """The newest installed `._cfgNNNN_` file protecting `original_path`
+    (the plan-phase `needs updating` finding names the ORIGINAL; the
+    etc-update channel operates on the pending new file)."""
+    d = Path(original_path).parent
+    name = Path(original_path).name
+    pat = re.compile(r"^\.?_cfg\d{4}_" + re.escape(name) + r"$")
+    if not d.is_dir():
+        return None
+    matches = [p for p in d.iterdir() if p.is_file() and pat.match(p.name)]
+    return str(max(matches, key=lambda p: p.name)) if matches else None
+
+
+def apply_file(path: str, decision: dict, *, current_path: str | None = None,
+               confirm_fn=lambda _p: True) -> dict:
+    """Single-file application entry shared by the post-build config-protect
+    flow and the plan-phase `needs updating` variant (design D4). `path` is
+    the pending `._cfg` file; the backup suffix and the atomic replace are
+    the channel's native mechanisms — this function adds no new writer."""
+    return apply_decision(path, decision, confirm_fn=confirm_fn, current_path=current_path)
+
+
+def apply_file_for_original(original_path: str, decide, *, confirm_fn=lambda _p: True) -> dict:
+    """Locate the pending file for an original config path and apply
+    `decide(new_path, current_path)`'s decision to it. No pending file ->
+    honest report, zero writes (the update may already have been merged)."""
+    new_path = pending_for(original_path)
+    if not new_path:
+        return {"applied": False, "action": "none",
+                "reason": f"no pending config update for {original_path} on disk"}
+    decision = decide(new_path, original_of(new_path))
+    res = apply_file(new_path, decision, confirm_fn=confirm_fn)
+    res.setdefault("path", original_of(new_path))
+    return res
+
+
 def show_diff(new_path: str, current_path: str | None = None, label: str = "", stream=None) -> str:
     stream = sys.stderr if stream is None else stream
     current = current_path or original_of(new_path)
