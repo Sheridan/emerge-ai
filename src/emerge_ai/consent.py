@@ -5,8 +5,11 @@ point contract (printed before the point exists) plus a numbered list whose
 every item is an executable whitelist scenario. A number runs through the
 gate's execution core (autonomy matrix + audit); the operator's own text goes
 to the model channel, the menu comes back — rounds are unlimited, the guard
-is the operator themselves (abort in every round, EOF, ctrl-c). Without an
-endpoint the dialog still works: free-text reprints the menu with a note.
+is the operator themselves (abort in every round, EOF, ctrl-c). The channel
+is a dialogue (ConsentDialogue): it remembers its rounds, answers the
+operator's question first, and reads evidence with read-only tools.
+Without an endpoint the dialog still works: free-text reprints the menu with
+a note.
 
 The model may comment and reorder variants by key; a variant without a typed
 spec has no action and cannot exist, so the model never invents commands (D8).
@@ -16,9 +19,11 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 
-from emerge_ai import config_edit, gate, injection, llm, prompts, rollback, triage, ui
+from emerge_ai import (agent, config_edit, gate, injection, llm, prompts, rollback,
+                       triage, ui)
 
 MENU_CAP = 6  # the ask_operator option cap, reused for the consent menu
 
@@ -94,6 +99,15 @@ def menu_specs(verdict, plan, *, world: list[str] | None = None,
     never cut, the least specific fixes fall off first."""
     tiers = tuple(sorted({e.tier for e in plan.entries})) if plan is not None else ()
     n = len(plan.entries) if plan is not None else 0
+    # an unbuilt plan is not an empty queue (spec: consent-dialogue,
+    # fix-queued-plan-parsing): the operator must never consent to a merge
+    # described as "0 package(s)" when nobody actually counted
+    if plan is None:
+        queue_text = "queue unknown: the plan could not be built"
+    elif n:
+        queue_text = f"{n} package(s), tiers {_fmt_tiers(tiers)}"
+    else:
+        queue_text = "0 package(s)"
     specs: list[MenuSpec] = []
     manual: list[str] = []
     degraded = bool(verdict.get("status") == triage.DEGRADED if isinstance(verdict, dict)
@@ -160,10 +174,10 @@ def menu_specs(verdict, plan, *, world: list[str] | None = None,
                     action={"type": "command", "name": "emerge-deselect",
                             "slots": {"atom": atom}},
                 ))
-        merged_desc = (f"merge the queue as shown ({n} package(s), tiers "
-                       f"{_fmt_tiers(tiers)}; {len(findings)} finding(s) stay unresolved)")
+        merged_desc = (f"merge the queue as shown ({queue_text}; "
+                       f"{len(findings)} finding(s) stay unresolved)")
     else:
-        merged_desc = f"merge the queue as shown ({n} package(s), tiers {_fmt_tiers(tiers)})"
+        merged_desc = f"merge the queue as shown ({queue_text})"
     specs.append(MenuSpec(key="merge", title=merged_desc, kind="merge", tiers=tiers))
     if len(specs) > MENU_CAP:
         merge = next(s for s in specs if s.kind == "merge")
@@ -191,13 +205,19 @@ def render_question(contract_block: list[str], specs: list[MenuSpec],
 
 
 CONSENT_ANALYSIS_SYSTEM = (
-    "You are the consent briefer of emerge-ai (Gentoo). The operator answered a "
-    "consent menu with free text. Analyze the consequences of what they propose "
-    "in 2-4 short plain-text lines using only facts from the input. Then order "
-    "the given variant keys by usefulness for the operator. You MUST NOT invent "
-    "actions or rename keys: the numbered list is fixed by the whitelist. "
-    'Answer with exactly one JSON object and nothing else: {"comment": '
-    '"<2-4 short lines>", "order": ["<key>", "..."]}.'
+    "You are the installation advisor of emerge-ai (Gentoo). The operator "
+    "answered a consent menu with free text — a question, a correction or a "
+    "proposal about getting the requested packages installed and the system "
+    "updated: that is the whole point of this run. First answer their text "
+    "directly and concretely: use the facts in the input and, when they are "
+    "not enough, look the answer up with the read-only tools (the plan log "
+    "with read_file_window/grep_log, journal_search, check_world, "
+    "pretend_emerge hypotheses, web_fetch for upstream). Then, only if the "
+    "answer changes which options are useful, order the given variant keys "
+    "by usefulness for the operator. You MUST NOT invent actions or rename "
+    "keys: the numbered list is fixed by the whitelist. Answer with exactly "
+    'one JSON object and nothing else: {"comment": '
+    '"<answer to the operator, short lines>", "order": ["<key>", "..."]}.'
 )
 
 
@@ -245,6 +265,156 @@ def parse_analysis(reply: str) -> tuple[str, list]:
         order = data.get("order")
         return data["comment"].strip(), order if isinstance(order, list) else []
     return (reply or "").strip(), []
+
+
+# The channel's read-only tools (change consent-question-channel, D4): the
+# agent's whitelist minus ask_operator — the operator is already in the
+# dialogue, their text is the question channel. No executing tool exists
+# here: a numbered variant stays the only mutation path.
+CONSENT_READONLY_TOOLS = (
+    "read_file_window", "grep_log", "journal_search",
+    "web_fetch", "pretend_emerge", "check_world",
+)
+CONSENT_TOOL_SPECS = [s for s in agent.TOOL_SPECS
+                      if s["function"]["name"] in CONSENT_READONLY_TOOLS]
+
+# issued once when the tool-loop budget runs out mid-round (task 5.1 live
+# calibration): the evidence already gathered must produce an answer
+TOOL_STOP_DIRECTIVE = (
+    "TOOL BUDGET EXHAUSTED — do not call tools any more. Using everything you "
+    "have already seen, answer the operator now: exactly one JSON object "
+    '{"comment": ..., "order": [...]} and nothing else.'
+)
+
+
+class ConsentDialogue:
+    """The stateful model channel behind the consent menu (spec:
+    consent-dialogue, change consent-question-channel): the message history
+    outlives a round, so the model remembers what it answered and which
+    repairs ran, and a follow-up question reads the earlier rounds. Free text
+    gets an advisor answer, not a shrug — when the input lacks facts the
+    channel inspects the evidence with read-only tools. `analyze(text, specs)
+    -> (comment, order)` keeps the run_dialog seam signature; ANY round
+    failure degrades to a note above the menu (the unguarded dict-shaped
+    read of a Response is what once killed a live run)."""
+
+    HISTORY_BUDGET = 24_000  # serialized chars before compression kicks in
+
+    def __init__(self, client, *, language: str = "English", sandbox=None,
+                 max_rounds: int = 6, repairs: list | None = None):
+        self.client = client
+        self.language = language
+        # sandbox None keeps the channel tool-free (tests, jail-less hosts)
+        self.sandbox = sandbox
+        self.max_rounds = max_rounds
+        # the live run.consent_repairs list: the history digest names the
+        # fixes applied through the menu since the run began
+        self.repairs = repairs if repairs is not None else []
+        # one entry per round: [user, assistant/tool exchange..., assistant]
+        self.rounds: list[list[dict]] = []
+
+    def analyze(self, text, specs):
+        try:
+            return self._round(text, specs)
+        except Exception as exc:  # the menu, not the run, absorbs a bad round
+            return f"consent analysis unavailable ({exc})", []
+
+    def _round(self, text, specs):
+        pair = build_analysis_messages(specs, text, language=self.language)
+        current: list[dict] = [pair[1]]
+        request = self._request(pair[0], current)
+        if self.sandbox is not None and CONSENT_TOOL_SPECS:
+            recorded: list[dict] = []
+            try:
+                resp = llm.run_tool_loop(self.client, request, CONSENT_TOOL_SPECS,
+                                         self._dispatch(), max_rounds=self.max_rounds,
+                                         record=recorded)
+            except llm.LimitExhausted:
+                # the live check (task 5.1): an endpoint that spends the whole
+                # budget is working productively, not stuck — throw away the
+                # budget, not the collected evidence: one tool-free round
+                # forces the conclusion. A failure here degrades to a note.
+                current.extend(recorded)
+                current.append({"role": "user", "content": TOOL_STOP_DIRECTIVE})
+                resp = self.client.chat(request + recorded + [current[-1]])
+            else:
+                current.extend(recorded)
+        else:
+            resp = self.client.chat(request)
+        reply = llm.response_text(resp)
+        current.append({"role": "assistant", "content": reply})
+        self.rounds.append(current)
+        return parse_analysis(reply)
+
+    def _request(self, system_msg: dict, current: list[dict]) -> list[dict]:
+        flat = [m for r in self.rounds for m in r] + current
+        size = sum(len(json.dumps(m, ensure_ascii=False)) for m in flat)
+        if size <= self.HISTORY_BUDGET or len(self.rounds) <= 2:
+            return [system_msg] + flat
+        # deterministic compression (design D2): every round but the last two
+        # folds into one system digest — no LLM summarising, cheap to audit
+        digest = {"role": "system", "content": self._digest(self.rounds[:-2])}
+        return ([system_msg, digest]
+                + [m for r in self.rounds[-2:] for m in r] + current)
+
+    def _digest(self, collapsed: list[list[dict]]) -> str:
+        def plain(text: str, cap: int) -> str:
+            body = [ln for ln in text.splitlines() if not ln.startswith("<<<")]
+            return " ".join(" ".join(body).split())[:cap]
+
+        lines = ["EARLIER CONSENT ROUNDS (condensed; the recent ones follow "
+                 "verbatim):"]
+        for rnd in collapsed:
+            asked = rnd[0]["content"].rpartition("OPERATOR:")[2]
+            lines.append("  - operator: " + plain(asked, 120))
+            answered = next((m.get("content") for m in reversed(rnd)
+                             if m["role"] == "assistant" and m.get("content")), "")
+            if answered:
+                lines.append("    answered: " + plain(answered, 160))
+        if self.repairs:
+            lines.append("  - repairs applied from this menu: "
+                         + ", ".join(str(r.get("variant", "?")) for r in self.repairs))
+        return "\n".join(lines)
+
+    def _dispatch(self):
+        """The same read-only executors as the incident agent, without its
+        interactive gating (design D4): dispatched straight off the Sandbox
+        methods; jail and caps are the sandbox's."""
+        sandbox = self.sandbox
+
+        def call(name: str, args: dict) -> dict:
+            # progress-logging: the round must show what it is doing, the
+            # same capped activity line the incident agent prints
+            print(ui.activity(f"tool: {name}("
+                              f"{ui.clip(json.dumps(args, ensure_ascii=False), 160)})"),
+                  file=sys.stderr)
+            try:
+                if name == "read_file_window":
+                    out = sandbox.read_file_window(
+                        args.get("path", ""), int(args.get("offset", 0)),
+                        int(args.get("limit", 200)))
+                elif name == "grep_log":
+                    out = sandbox.grep_log(args.get("path", ""), args.get("pattern", ""))
+                elif name == "journal_search":
+                    out = sandbox.journal_search(*[str(a) for a in args.get("args", [])])
+                elif name == "web_fetch":
+                    out = sandbox.web_fetch(args.get("url", ""))
+                elif name == "pretend_emerge":
+                    out = sandbox.pretend_emerge(
+                        list(args.get("atoms", [])), list(args.get("extra_flags", [])),
+                        dict(args.get("env_overrides", {}) or {}))
+                elif name == "check_world":
+                    out = sandbox.check_world()
+                else:
+                    return {"error": f"unknown tool {name}"}
+            except PermissionError as exc:
+                return {"error": f"denied by sandbox: {exc}"}
+            data = json.dumps(out, ensure_ascii=False)
+            if name in ("read_file_window", "grep_log", "web_fetch", "check_world"):
+                data = injection.wrap_untrusted(data, source=name)
+            return {"content": data[:agent.MAX_TOOL_RESULT_CHARS]}
+
+        return call
 
 
 def run_dialog(specs: list[MenuSpec], *, contract_block: list[str], manual: list[str],

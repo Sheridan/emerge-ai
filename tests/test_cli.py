@@ -733,3 +733,70 @@ def test_rollback_mode_snapshot_case_prints_offline_instructions(tmp_path, ok_co
     assert rc == 0 and seen == []
     err = capfd.readouterr().err
     assert "rescue environment" in err and "artifacts were kept" in err
+
+
+# --- consent free-text channel (change consent-question-channel) -------------
+
+
+def _consent_endpoint(tmp_path):
+    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+
+
+def test_consent_channel_answers_with_response_object(emerge_stub, ok_compat, monkeypatch,
+                                                      tmp_path, capsys):
+    """The live crash was a dict-shaped read on a Response; the dialogue now
+    reads every answer shape and the comment reaches the operator."""
+    from emerge_ai.llm import Response
+    from emerge_ai.plan import Plan, PlanEntry
+
+    class AnsweringClient:
+        def __init__(self, cfg, **kw):
+            pass
+
+        def chat(self, messages, tools=None, **kw):
+            # the consent channel is the only caller with this system prompt
+            if "consent menu" in messages[0]["content"]:
+                return Response('{"comment": "jemalloc is pulled in by yazi", '
+                                '"order": []}')
+            return Response("unrelated call")
+
+    _consent_endpoint(tmp_path)
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli, "LLMClient", AnsweringClient)
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    answers = iter(["why jemalloc?", "q"])
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  input_fn=lambda prompt="": next(answers))
+    assert rc == 130  # the channel answers, only a number mutates
+    assert all(any(a in ("--pretend", "-p") for a in c) for c in calls())
+    assert "jemalloc is pulled in by yazi" in capsys.readouterr().err
+
+
+def test_consent_channel_crash_never_kills_the_run(emerge_stub, ok_compat, monkeypatch,
+                                                   tmp_path, capsys):
+    """spec: consent-question-channel — any round failure is a note above the
+    menu; the run survives and the operator can still abort."""
+    class CrashingClient:
+        def __init__(self, cfg, **kw):
+            pass
+
+        def chat(self, messages, tools=None, **kw):
+            if "consent menu" in messages[0]["content"]:
+                raise AttributeError("'Response' object has no attribute 'get'")
+            return "digest note"
+
+    _consent_endpoint(tmp_path)
+    binary, calls = emerge_stub
+    monkeypatch.setattr(cli, "LLMClient", CrashingClient)
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    answers = iter(["fix the world please", "q"])
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  input_fn=lambda prompt="": next(answers))
+    assert rc == 130
+    err = capsys.readouterr().err
+    assert "consent analysis unavailable" in err
+    assert "'Response' object has no attribute 'get'" in err
+    assert err.count("merge the queue as shown") == 2  # menu came back after it
+    assert all(any(a in ("--pretend", "-p") for a in c) for c in calls())

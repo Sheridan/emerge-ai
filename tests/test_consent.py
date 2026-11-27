@@ -5,6 +5,7 @@ import io
 import json
 
 from emerge_ai import consent, triage, ui
+from emerge_ai.llm import Response, ToolCall
 from emerge_ai.plan import Plan, PlanEntry
 
 MASKED = ("!!! app-container/edk2-bin-2024:0 is masked by: "
@@ -57,6 +58,27 @@ def test_menu_clean_plan_is_merge_only():
     specs, manual = consent.menu_specs(triage.Verdict(triage.CLEAN), PLAN_T1)
     assert [s.key for s in specs] == ["merge"]
     assert manual == []
+
+
+def test_menu_unavailable_plan_says_queue_unknown_not_zero():
+    """spec: consent-dialogue (fix-queued-plan-parsing) — an unbuilt plan is
+    not an empty queue: the merge item must never promise a merge of "0
+    package(s)" for a queue nobody counted."""
+    specs, _ = consent.menu_specs(triage.Verdict(triage.CLEAN), None)
+    merge = next(s for s in specs if s.kind == "merge")
+    assert "queue unknown" in merge.title and "0 package(s)" not in merge.title
+    degraded_specs, _ = consent.menu_specs(_verdict(), None)
+    merge2 = next(s for s in degraded_specs if s.kind == "merge")
+    assert "queue unknown" in merge2.title and "stay unresolved" in merge2.title
+    # the recovery contract stays conservative for an unknown queue
+    contract = "\n".join(consent.protect_contract(None, fs="btrfs", run_id="rx"))
+    assert "none required" not in contract
+
+
+def test_menu_empty_queue_is_honestly_zero():
+    specs, _ = consent.menu_specs(triage.Verdict(triage.CLEAN), Plan(entries=[]))
+    merge = next(s for s in specs if s.kind == "merge")
+    assert "0 package(s)" in merge.title and "unknown" not in merge.title
 
 
 def test_menu_degraded_typed_variants_and_manual_advice():
@@ -328,3 +350,155 @@ def test_run_dialog_passes_stream_to_menu(tmp_path):
         input_fn=lambda prompt="": next(it), stream=tty)
     assert decision["status"] == "abort"
     assert f"\x1b[1;33m{ui.DECISION_BANNER}\x1b[0m" in said[0]
+
+
+# --- consent dialogue channel (change consent-question-channel) --------------
+
+class DialogueClient:
+    """Scripted chat(): yields Response objects, raises exception instances."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.requests = []
+
+    def chat(self, messages, tools=None, **kw):
+        self.requests.append((list(messages), tools))
+        reply = self.replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+
+def _reply(comment, order=None):
+    return Response(json.dumps({"comment": comment, "order": order or []}))
+
+
+MERGE_SPEC = consent.MenuSpec(key="merge", title="merge the queue", kind="merge")
+
+
+def test_dialogue_answers_the_operator_before_ordering():
+    """spec: consent-question-channel — a question gets an answer first, the
+    order comes second; the input alone need not carry the facts (tools)."""
+    client = DialogueClient([_reply("edk2-bin provides the UEFI firmware qemu boots")])
+
+    class Jail:  # sandbox presence is what arms the read-only tool channel
+        pass
+
+    dlg = consent.ConsentDialogue(client, sandbox=Jail())
+    comment, order = dlg.analyze("for what do we even need edk2-bin?", [MERGE_SPEC])
+    assert comment.startswith("edk2-bin provides")
+    assert order == []
+    system, tools = client.requests[0][0][0]["content"], client.requests[0][1]
+    assert system.index("First answer") < system.index("order the given variant keys")
+    names = {t["function"]["name"] for t in tools}
+    assert "grep_log" in names and "ask_operator" not in names
+    assert "for what do we even need edk2-bin?" in client.requests[0][0][1]["content"]
+
+
+def test_dialogue_history_survives_menu_rebuild():
+    client = DialogueClient([_reply("first answer"), _reply("second, based on first")])
+    dlg = consent.ConsentDialogue(client)
+    dlg.analyze("why is the plan degraded?", [MERGE_SPEC])
+    ak = consent.MenuSpec(key="ak-edk2", title="accept keyword edk2", kind="fix")
+    comment, _ = dlg.analyze("then take the keyword fix?", [ak, MERGE_SPEC])
+    assert comment == "second, based on first"
+    second = client.requests[1][0]
+    asked = [m["content"] for m in second if m["role"] == "user"]
+    assert any("why is the plan degraded" in a for a in asked)  # past round kept
+    assert any("accept keyword edk2" in a for a in asked)  # rebuilt menu sent
+    answers = [m["content"] for m in second if m["role"] == "assistant"]
+    assert any("first answer" in a for a in answers)
+
+
+def test_dialogue_compression_is_deterministic_and_keeps_the_tail():
+    client = DialogueClient([_reply(f"answer {i}") for i in range(5)])
+    dlg = consent.ConsentDialogue(client)
+    dlg.HISTORY_BUDGET = 1000
+    dlg.repairs.append({"variant": "ak-edk2"})
+    for i in range(5):
+        dlg.analyze(f"question number {i} with some padding text", [MERGE_SPEC])
+    # no LLM summarising call: exactly one request per round
+    assert len(client.requests) == 5 and client.replies == []
+    final = client.requests[-1][0]
+    assert [m["role"] for m in final[:2]] == ["system", "system"]
+    digest = final[1]["content"]
+    assert "question number 0" in digest and "answered:" in digest
+    assert "ak-edk2" in digest  # the applied repair is named
+    verbatim = " ".join(m["content"] for m in final[2:] if m["role"] == "user")
+    assert "question number 3" in verbatim
+    assert "question number 0" not in verbatim
+    # deterministic: the same history compresses to the same bytes
+    assert dlg._digest(dlg.rounds[:2]) == dlg._digest(dlg.rounds[:2])
+
+
+def test_dialogue_any_round_failure_degrades_to_note():
+    """The live-run crash (dict-shaped read on a Response) must not escape."""
+    dlg = consent.ConsentDialogue(DialogueClient(
+        [AttributeError("'Response' object has no attribute 'get'")]))
+    comment, order = dlg.analyze("почини мир", [MERGE_SPEC])
+    assert "consent analysis unavailable" in comment
+    assert "'Response' object has no attribute 'get'" in comment
+    assert order == []
+    assert dlg.rounds == []  # a broken round never pollutes the history
+
+
+def test_dialogue_limit_exhausted_degrades_like_channel_failure():
+    from emerge_ai.llm import LimitExhausted
+    dlg = consent.ConsentDialogue(DialogueClient([LimitExhausted("rounds")]))
+    comment, order = dlg.analyze("what now?", [MERGE_SPEC])
+    assert "consent analysis unavailable" in comment and "limit exhausted" in comment
+    assert order == []
+
+
+def test_consent_channel_tool_set_is_read_only():
+    names = {s["function"]["name"] for s in consent.CONSENT_TOOL_SPECS}
+    assert names == set(consent.CONSENT_READONLY_TOOLS)
+    assert "ask_operator" not in names
+    assert names.isdisjoint({"run_command", "apply_action", "write_file", "edit_config"})
+
+
+def test_dialogue_dispatch_runs_tools_on_the_sandbox_and_records_exchange():
+    class RecSandbox:
+        def __init__(self):
+            self.calls = []
+
+        def check_world(self):
+            self.calls.append("check_world")
+            return {"rc": 0}
+
+    sb = RecSandbox()
+    client = DialogueClient([
+        Response("", tool_calls=[ToolCall(id="t1", name="check_world", arguments={})]),
+        _reply("world file is fine"),
+    ])
+    dlg = consent.ConsentDialogue(client, sandbox=sb)
+    comment, order = dlg.analyze("is my world broken?", [MERGE_SPEC])
+    assert comment == "world file is fine" and order == []
+    assert sb.calls == ["check_world"]
+    assert [m["role"] for m in dlg.rounds[0]] == ["user", "assistant", "tool", "assistant"]
+    payload = json.loads(dlg.rounds[0][2]["content"])["content"]
+    assert "check_world" in payload and "rc" in payload  # wrapped untrusted JSON
+
+
+def test_dialogue_forces_a_conclusion_when_tool_budget_runs_out():
+    """Live calibration (task 5.1): an endpoint that spends the whole tool
+    budget is researching — the round must end with an answer, not a note."""
+    from emerge_ai.llm import LimitExhausted
+
+    class BudgetClient:
+        def __init__(self):
+            self.requests = []
+
+        def chat(self, messages, tools=None, **kw):
+            self.requests.append((list(messages), tools))
+            if tools:  # every tool-loop hop hits the rounds limit
+                raise LimitExhausted("rounds")
+            return _reply("conclusion after the tool budget")
+
+    dlg = consent.ConsentDialogue(BudgetClient(), sandbox=object())
+    comment, order = dlg.analyze("why is edk2-bin skipped?", [MERGE_SPEC])
+    assert comment == "conclusion after the tool budget" and order == []
+    final_msgs, final_tools = dlg.client.requests[-1]
+    assert final_tools is None  # the wrap-up round cannot call tools
+    assert "TOOL BUDGET EXHAUSTED" in final_msgs[-1]["content"]
+    assert dlg.rounds[0][-1]["role"] == "assistant"  # the round is history now

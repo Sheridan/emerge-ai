@@ -203,6 +203,17 @@ class LimitExhausted(LLMError):
         self.messages = messages or []
 
 
+def response_text(result) -> str:
+    """Answer text out of any chat shape (change consent-question-channel, D5):
+    the raw API dict contract, a `Response`, or a bare string. The consent
+    channel once crashed reading `resp.get(...)` off a `Response` — this seam
+    is where that shape difference is absorbed. Never raises."""
+    if isinstance(result, dict):
+        choices = result.get("choices") or [{}]
+        return str((choices[0].get("message") or {}).get("content") or "").strip()
+    return str(getattr(result, "content", result) or "").strip()
+
+
 def try_structured(reply: str) -> dict | None:
     """Extract the first JSON object from a model reply and parse it (the
     shared schema-parsing seam for structured prompts, spec: run-reporting):
@@ -426,8 +437,14 @@ def run_tool_loop(
     dispatch,
     max_rounds: int = 8,
     render_to=None,
+    record: list | None = None,
 ) -> Response:
-    """Drive model->tool->model until a content answer or the round budget."""
+    """Drive model->tool->model until a content answer or the round budget.
+
+    `record` (change consent-question-channel): the conversation may outlive
+    one call; every assistant/tool message the loop appends is mirrored into
+    this list so a stateful caller (the consent dialogue) keeps the full
+    tool exchange in its own history."""
     msgs = list(messages)
     last: Response | None = None
     for _ in range(max_rounds):
@@ -439,27 +456,29 @@ def run_tool_loop(
             raise LimitExhausted("tokens", partial=last, messages=msgs)
         if not last.tool_calls:
             return last
-        msgs.append(
-            {
-                "role": "assistant",
-                "content": last.content or None,
-                "tool_calls": [
-                    {
-                        "id": c.id,
-                        "type": "function",
-                        "function": {"name": c.name, "arguments": json.dumps(c.arguments)},
-                    }
-                    for c in last.tool_calls
-                ],
-            }
-        )
+        assistant = {
+            "role": "assistant",
+            "content": last.content or None,
+            "tool_calls": [
+                {
+                    "id": c.id,
+                    "type": "function",
+                    "function": {"name": c.name, "arguments": json.dumps(c.arguments)},
+                }
+                for c in last.tool_calls
+            ],
+        }
+        msgs.append(assistant)
+        if record is not None:
+            record.append(assistant)
         for call in last.tool_calls:
             result = dispatch(call.name, call.arguments)
-            msgs.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": json.dumps(result, ensure_ascii=False),
-                }
-            )
+            tool_msg = {
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": json.dumps(result, ensure_ascii=False),
+            }
+            msgs.append(tool_msg)
+            if record is not None:
+                record.append(tool_msg)
     raise LimitExhausted("rounds", partial=last, messages=msgs)

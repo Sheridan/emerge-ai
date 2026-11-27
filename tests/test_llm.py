@@ -11,6 +11,7 @@ from emerge_ai.llm import (
     LLMError,
     Response,
     ToolCall,
+    response_text,
     run_tool_loop,
 )
 
@@ -760,3 +761,33 @@ def test_stream_tool_loop_shows_every_turn_exactly_once(monkeypatch):
     assert final.content == "done"
     out = buf.getvalue()
     assert out.count("R1") == 1 and out.count("R2") == 1 and out.count("done") == 1
+
+
+def test_response_text_absorbs_every_answer_shape():
+    # spec: consent-question-channel (D5) — one seam for dict/Response/str;
+    # the dict-shaped read of a Response is what crashed the live run
+    assert response_text({"choices": [{"message": {"content": " dict answer "}}]}) == "dict answer"
+    assert response_text({"choices": []}) == ""
+    assert response_text(Response(content="dataclass answer")) == "dataclass answer"
+    assert response_text(Response()) == ""
+    assert response_text("plain string") == "plain string"
+    assert response_text(None) == ""
+
+
+def test_run_tool_loop_record_keeps_the_tool_exchange():
+    class LoopClient:
+        def __init__(self):
+            self.n = 0
+
+        def chat(self, messages, tools=None, **kw):
+            self.n += 1
+            if self.n == 1:
+                return Response(tool_calls=[ToolCall(id="c1", name="ping", arguments={})])
+            return Response(content="done")
+
+    recorded = []
+    resp = run_tool_loop(LoopClient(), [{"role": "user", "content": "x"}], [],
+                         lambda name, args: {"pong": True}, record=recorded)
+    assert resp.content == "done"
+    assert [m["role"] for m in recorded] == ["assistant", "tool"]
+    assert recorded[0]["tool_calls"][0]["function"]["name"] == "ping"

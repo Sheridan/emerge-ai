@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 
-from emerge_ai import injection, ui
+from emerge_ai import injection, llm, ui
 from emerge_ai.prompts import PLAIN_TEXT_DIRECTIVE
 
 ESELEC_NEWS = "eselect"
@@ -98,11 +98,9 @@ def build_digest_messages(items: list[dict], bodies: dict[int, str],
 def parse_digest(reply) -> str:
     """Plain text out of any chat shape (API dict / object / string); a model
     that wrapped its answer in prose keeps every line — the digest is
-    advisory text, there is no schema to fail."""
-    if isinstance(reply, dict):
-        choices = reply.get("choices") or [{}]
-        return str((choices[0].get("message") or {}).get("content") or "").strip()
-    return str(getattr(reply, "content", reply) or "").strip()
+    advisory text, there is no schema to fail. Delegates to the shared
+    llm.response_text seam (change consent-question-channel, D5)."""
+    return llm.response_text(reply)
 
 
 def deterministic_lines(items: list[dict]) -> list[str]:

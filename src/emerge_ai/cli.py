@@ -1042,18 +1042,21 @@ def main(
         if cfg is not None and cfg.endpoint:
             try:
                 consent_client = LLMClient(cfg, verbose=verbose)
-
-                def consent_analyze(text, specs, _c=consent_client):  # noqa: F811
-                    """Free-text -> model channel: comment + order by keys; the
-                    menu itself stays the whitelist's (design D8)."""
-                    try:
-                        resp = _c.chat(consent_mod.build_analysis_messages(
-                            specs, text, language=cfg.resolved_language()))
-                        reply = ((resp.get("choices") or [{}])[0]
-                                 .get("message") or {}).get("content") or ""
-                    except LLMError as exc:
-                        return f"LLM analysis unavailable ({exc})", []
-                    return consent_mod.parse_analysis(reply)
+                # the channel is a dialogue (consent-question-channel D1/D4):
+                # built once before the consent loop so history survives
+                # rounds and menu rebuilds; the read-only tools see the plan
+                # artifact jail, the same roots the pretend branch uses
+                from emerge_ai.sandbox import DEFAULT_JAIL_ROOTS, Sandbox
+                dialogue = consent_mod.ConsentDialogue(
+                    consent_client,
+                    language=cfg.resolved_language(),
+                    sandbox=Sandbox(
+                        roots=tuple(DEFAULT_JAIL_ROOTS)
+                        + ((os.path.dirname(artifact_path),) if artifact_path else ())
+                    ),
+                    repairs=run.consent_repairs,
+                )
+                consent_analyze = dialogue.analyze
             except LLMError as exc:
                 print(ui.warn(f"{exc}; consent free-text falls back to the menu"),
                       file=sys.stderr)

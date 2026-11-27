@@ -485,3 +485,41 @@ sudo emerge-ai -uDN @world -av
 sudo emerge-ai -uDN @world -av >run.log 2>&1; grep -c $'\x1b' run.log   # → 0
 NO_COLOR=1 sudo emerge-ai -av =app-container/edk2-bin                    # в TTY без кодов
 #   → в файле видны «── decisions», пустые строки-разделители и теги [{kind}]
+
+## Очередь со статус-флагами (fix-queued-plan-parsing, выполнено агентом 2026-11-27)
+
+Стенд: очередь `-auDN @world` из двух обновлений, оба `[ebuild     U ~]`
+(dev-libs/jemalloc-5.4.0-r2, app-misc/yazi-26.9.1). Прогонялось от исходников репо
+(`sudo env PYTHONPATH=$PWD/src python3 -m emerge_ai.cli ...`).
+
+```bash
+# 1) digest считает обновления с флагами статуса (было: пустая очередь):
+sudo emerge-ai -p -auDN @world
+#   → проверено: «tier 5: 2 pkg(s) — dev-libs/jemalloc-5.4.0-r2, app-misc/yazi-26.9.1»
+
+# 2) consent-меню описывает реальную очередь merge:
+sudo emerge-ai -auDN --ask @world        # в TTY; q — выход без изменений
+#   → проверено: «[2] merge the queue as shown (2 package(s), tiers 5;
+#     5 finding(s) stay unresolved)» (до фикса: «0 package(s), tiers unknown»);
+#     не-TTY stdin — штатный legacy «Proceed?» без диалога, EOF → «interrupted;
+#     nothing changed», rc 0, ни снапшота, ни merge не создано
+
+## Советник в consent-диалоге (consent-question-channel, выполнено агентом 2026-11-27)
+
+Стенд: деградированный `-auDN @world` (конфликт sys-firmware/edk2-bin с пином qemu),
+эндпоинт strata/qwen3.8-flash. Прогон в TTY (`script`) от исходников репо; свободный
+текст вводится в ответ consent-меню.
+
+```bash
+sudo emerge-ai -auDN --ask @world      # в TTY; далее — вопрос свободным текстом
+#   → проверено, раунд 1 («для чего нужен edk2-bin и что сделать, чтобы он обновился?»):
+#     канал прочитал plan-артефакт, world, elog (tool: read_file_window/grep_log),
+#     сделал pretend-гипотезу (tool: pretend_emerge), на исчерпании раундов
+#     инструментов получил заключительный ответ без инструментов (finish=stop) —
+#     содержательный ответ по-русски (зачем пакет, почему 202608_p1 не появляется,
+#     что делать), затем перерисованное меню, ни одно действие не исполнено;
+#     до фикса тот же вопрос ронял запуск (AttributeError на Response)
+#   → проверено, раунд 2 («какой пункт меню ты советоваешь исходя из прошлого ответа?»):
+#     запрос ушёл с историей (23 сообщения, включая прошлый tool-обмен и ответ),
+#     ответ сослался на прошлый раунд («deselect не выбирайте»); q → «operator
+#     aborted; nothing changed», rc 0 (--ask), ни снапшота, ни merge не создано
