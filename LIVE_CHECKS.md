@@ -251,3 +251,28 @@ sudo emerge-ai --noninteractive --i-understand-the-risks category/pkg
 # 5) прочий сбой агента (выключить endpoint) — как раньше: «agent unavailable»
 #    или «agent stopped: ...», строки «agent limit exhausted» нет
 ```
+
+## Строки активности и дампы (-v) (add-progress-logging, выполняет пользователь)
+
+```bash
+# 1) анонсы по умолчанию (без -v):
+sudo emerge-ai -p app-editors/vim
+#   → в stderr видны «emerge-ai: running: emerge ...» (полный argv) и
+#     «emerge-ai: sending request to LLM (model=..., N messages, tools=...)»
+#     до появления LLM-сводки; тел запросов в выводе НЕТ
+
+# 2) детализация при -v:
+sudo emerge-ai -pv app-editors/vim 2>/tmp/verbose.log
+#   → в /tmp/verbose.log: «request payload: {...}» (JSON запроса; при переполнении
+#     — с плашкой [capped, N chars total]) и «LLM answered in X.Xs (finish=...)»;
+#     emerge получил -v без изменений (его собственный вывод не сломан)
+
+# 3) секрет не утекает: при api_key в конфиге ни в одном дампе stderr нет ни
+#    значения ключа, ни заголовка Authorization
+
+# 4) stdout не тронут: sudo emerge-ai -p app-editors/vim 1>/tmp/out.txt 2>/dev/null
+#    → в /tmp/out.txt только вывод emerge, строк «emerge-ai: running:» нет
+
+# 5) tool-call'и агента (сбойный атом, разбор): до каждого инструмента строка
+#    «emerge-ai: tool: <имя>(<аргументы>)», длинные аргументы срезаны плашкой
+```

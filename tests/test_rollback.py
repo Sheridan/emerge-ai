@@ -171,3 +171,26 @@ def test_restore_archive_roundtrip(tmp_path):
     msg = restore_archive(prot, target_root=str(target))
     assert "1 file" in msg
     assert (target / "usr/share/hello.txt").read_text() == "pre-merge"
+
+
+def test_btrfs_and_restore_are_announced(monkeypatch, capsys):
+    # spec: progress-logging — snapshot/restore commands are significant actions
+    from emerge_ai import rollback as rollback_mod
+
+    class P:
+        returncode, stdout, stderr = 0, "ok", ""
+
+    monkeypatch.setattr(rollback_mod.subprocess, "run", lambda argv, **kw: P())
+    assert rollback_mod._default_btrfs(["subvolume", "snapshot", "-r", "/", "/s/1"]) == "ok"
+    assert "emerge-ai: running: btrfs subvolume snapshot -r / /s/1" in capsys.readouterr().err
+
+
+def test_restore_archive_announces(tmp_path, capsys):
+    from emerge_ai import rollback as rollback_mod
+
+    prot = Protection(run_id="r10", archive_dir=str(tmp_path / "nope"))
+    try:
+        rollback_mod.restore_archive(prot, target_root=str(tmp_path / "root"))
+    except Exception:
+        pass  # the archive is missing; the announcement precedes the failure
+    assert "emerge-ai: restoring archive" in capsys.readouterr().err

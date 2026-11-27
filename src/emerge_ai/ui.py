@@ -86,6 +86,23 @@ def info(text: str, stream=None) -> str:
     return PREFIX + text
 
 
+def activity(text: str, stream=None) -> str:
+    """Progress-logging line: announces what emerge-ai is about to do next
+    (spec: progress-logging). Info-style — deliberately unpainted even on a
+    TTY, so pipes, NO_COLOR and TERM=dumb render the exact same plain text.
+    Callers print it to stderr; emerge's stdout passthrough stays untouched."""
+    return PREFIX + text
+
+
+def clip(text: str, limit: int = 200) -> str:
+    """Cap a value to `limit` characters with an explicit truncation marker,
+    so one activity line never becomes a screen-filling dump."""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f" …[capped, {len(text)} chars total]"
+
+
 def prompt(text: str, stream=None) -> str:
     return paint(sys.stdout if stream is None else stream, PROMPT_SGR, text)
 

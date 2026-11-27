@@ -136,6 +136,23 @@ def test_execute_backups_and_audits_before_running(tmp_path):
     assert "restore" in res["undo"]
 
 
+def test_execute_announces_full_argv(tmp_path, capsys):
+    # spec: progress-logging — the whitelisted argv is announced before it runs
+    world = world_file(tmp_path, ["dev-x/y"])
+    calls = []
+    res = whitelist.execute("emaint-fix-world", {}, run_id="r1",
+                            audit_path=tmp_path / "audit.jsonl", world_file=world,
+                            runner=make_runner(calls))
+    assert res["status"] == "executed"
+    assert "emerge-ai: running: emaint --fix world" in capsys.readouterr().err
+
+
+def test_rejected_execution_is_not_announced(tmp_path, capsys):
+    res = whitelist.execute("rm-rf-everything", {}, runner=lambda *a, **k: Proc())
+    assert res["status"] == "rejected"
+    assert "emerge-ai: running" not in capsys.readouterr().err
+
+
 def test_execute_revalidates_at_apply_time(tmp_path, capsys):
     world = world_file(tmp_path, ["dev-x/y"])
     audit = tmp_path / "audit.jsonl"

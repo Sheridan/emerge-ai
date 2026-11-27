@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import datetime
 import re
+import sys
 from pathlib import Path
+
+from emerge_ai import ui
 
 COMMENT_RE = re.compile(r"^#\s*emerge-ai:")
 
@@ -29,6 +32,8 @@ def apply_package_edit(
     target = Path(etc_dir) / f"package.{kind}"
     target.parent.mkdir(parents=True, exist_ok=True)
     comment = audit_comment(journal_id, reason, now)
+    # spec: progress-logging — which file gains which line (stderr only)
+    print(ui.activity(f"editing {target}: + {ui.clip(line, 200)}"), file=sys.stderr)
     with open(target, "a") as fh:
         fh.write(f"{line} {comment}\n")
     return target
@@ -103,5 +108,7 @@ def apply_user_patch(
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / f"{name}.diff"
     header = audit_comment(journal_id, reason, now)
+    # spec: progress-logging — the patch file written (stderr only)
+    print(ui.activity(f"writing patch {path}"), file=sys.stderr)
     path.write_text(f"{header}\n{patch_text}")
     return path

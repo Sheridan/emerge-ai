@@ -109,6 +109,23 @@ def test_message_helpers_plain_on_pipe():
     assert ui.prompt("Proceed? ", stream=pipe) == "Proceed? "
 
 
+def test_activity_is_plain_info_style_even_on_tty(monkeypatch):
+    # spec: progress-logging — activity lines follow console-output info style:
+    # no color accent, identical text on TTY, pipe, NO_COLOR
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    assert ui.activity("running: emerge -p x", stream=TTY()) == "emerge-ai: running: emerge -p x"
+    assert "\x1b" not in ui.activity("m", stream=TTY())
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert ui.activity("m", stream=TTY()) == "emerge-ai: m"
+
+
+def test_clip_caps_with_marker():
+    assert ui.clip("short", 200) == "short"
+    out = ui.clip("x" * 260, 200)
+    assert out.startswith("x" * 200)
+    assert out.endswith("[capped, 260 chars total]")
+
+
 def test_helpers_default_streams_resolved_at_call_time(monkeypatch):
     tty = TTY()
     monkeypatch.setattr(ui.sys, "stderr", tty)

@@ -5,9 +5,15 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 
 from emerge_ai import ui
+
+
+def _announce(argv: list[str]) -> None:
+    """External command about to run (spec: progress-logging); stderr only."""
+    print(ui.activity(f"running: {' '.join(str(a) for a in argv)}"), file=sys.stderr)
 
 DEFAULT_JAIL_ROOTS = ("/var/tmp/portage", "/var/log/portage", "/var/lib/portage")
 MAX_BYTES = 128_000
@@ -104,6 +110,7 @@ class Sandbox:
             raise BinaryNotAllowed(
                 f"{binary!r} is not on the read-only allowlist ({len(self.allowlist)} binaries)"
             )
+        _announce(argv)
         try:
             proc = subprocess.run(
                 argv, capture_output=True, text=True, timeout=timeout
@@ -118,6 +125,7 @@ class Sandbox:
         repair-actions). emaint is NOT on the run_readonly allowlist (its
         --fix mutates), so this dedicated entry pins the argv itself."""
         argv = ["emaint", "--check", "world"]
+        _announce(argv)
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=120.0)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -139,6 +147,7 @@ class Sandbox:
 
         if not url.startswith("https://"):
             return {"error": "only https:// is allowed"}
+        print(ui.activity(f"fetch: {url}"), file=sys.stderr)
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:
                 data = resp.read(self.max_bytes + 1)
@@ -162,6 +171,7 @@ class Sandbox:
             if key not in ENV_OVERRIDE_ALLOWLIST:
                 return {"error": f"env override {key!r} not allowed"}
         argv = [self.emerge_binary, "--pretend", "--quiet", *(extra_flags or []), *atoms]
+        _announce(argv)
         try:
             proc = subprocess.run(
                 argv,

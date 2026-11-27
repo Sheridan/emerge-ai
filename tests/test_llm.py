@@ -1,4 +1,5 @@
 import io
+import json
 import os
 
 import pytest
@@ -51,7 +52,7 @@ def test_parse_tool_calls_payload():
 def test_render_reasoning_only_when_enabled():
     resp = Response(content="answer", reasoning="because")
     buf_on, buf_off = io.StringIO(), io.StringIO()
-    LLMClient(Config(endpoint="http://x/v1"), show_reasoning=True).render(resp, stream=buf_on)
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True).render(resp, stream=buf_on)
     LLMClient(Config(endpoint="http://x/v1")).render(resp, stream=buf_off)
     assert "[reasoning] because" in buf_on.getvalue()
     assert "answer" in buf_on.getvalue()
@@ -67,7 +68,7 @@ class TTY(io.StringIO):
 def test_render_tty_uses_palette_colors():
     resp = Response(content="hello\nQUESTION: init?", reasoning="think")
     buf = TTY()
-    LLMClient(Config(endpoint="http://x/v1"), show_reasoning=True).render(resp, stream=buf)
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True).render(resp, stream=buf)
     out = buf.getvalue()
     assert "\x1b[2m[reasoning] think\x1b[0m" in out
     assert "\x1b[36mhello\x1b[0m" in out
@@ -173,6 +174,75 @@ def test_round_budget_raises_limit_exhausted_with_history():
     assert any(m["role"] == "tool" for m in ei.value.messages)
 
 
+# --- progress logging: chat-level visibility (spec: progress-logging) ------
+
+
+class _StubHTTP(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _stub_urlopen(monkeypatch, capture, reply=None):
+    from emerge_ai import llm as llm_mod
+
+    def fake(req, timeout=None):
+        capture["body"] = req.data.decode()
+        capture["url"] = req.full_url
+        return _StubHTTP(json.dumps(reply or {
+            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+        }).encode())
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake)
+
+
+def test_chat_announces_request_then_answer(monkeypatch):
+    seen = {}
+    _stub_urlopen(monkeypatch, seen)
+    buf = io.StringIO()
+    client = LLMClient(Config(endpoint="http://x/v1", model="m1"), stream=buf)
+    client.chat([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+                tools=[{"type": "function"}])
+    out = buf.getvalue()
+    assert "emerge-ai: sending request to LLM (model=m1, 2 messages, tools=1)" in out
+    assert "emerge-ai: LLM answered in " in out and "(finish=stop)" in out
+    # order: announcement precedes the answer line
+    assert out.index("sending request") < out.index("LLM answered")
+
+
+def test_announcements_default_to_stderr(monkeypatch):
+    import sys
+
+    seen = {}
+    _stub_urlopen(monkeypatch, seen)
+    buf = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", buf)
+    LLMClient(Config(endpoint="http://x/v1")).chat([{"role": "user", "content": "u"}])
+    assert "emerge-ai: sending request to LLM" in buf.getvalue()
+
+
+def test_verbose_dumps_request_payload_masks_key_and_caps(monkeypatch):
+    seen = {}
+    _stub_urlopen(monkeypatch, seen)
+    cfg = Config(endpoint="http://x/v1", model="m", api_key="secret-token-42")
+    msgs = [{"role": "user", "content": "leaked secret-token-42 in text " + "y" * 9000}]
+
+    buf = io.StringIO()
+    LLMClient(cfg, verbose=True, stream=buf).chat(msgs)
+    out = buf.getvalue()
+    assert "request payload:" in out and '"model": "m"' in out
+    assert "secret-token-42" not in out  # header never dumped, value masked
+    assert "***" in out
+    assert "[capped," in out  # the 9 KB prompt dump is capped with a marker
+
+    buf2 = io.StringIO()
+    LLMClient(cfg, stream=buf2).chat(msgs)  # no -v: no payload, no leak either
+    out2 = buf2.getvalue()
+    assert "request payload" not in out2 and "secret-token-42" not in out2
+
+
 # ---------------- live strata replay (design D13: all LLM tests hit strata) ----
 
 
@@ -219,7 +289,7 @@ def test_live_tool_call_loop_executes():
 
 @pytest.mark.integration
 def test_live_reasoning_visibility():
-    on, off = _live_client(show_reasoning=True), _live_client()
+    on, off = _live_client(verbose=True), _live_client()
     prompt = (
         "A package queue has 3 tiers with 2, 5 and 1 packages. How many total? "
         "Show the number."

@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -223,6 +224,8 @@ def execute(name: str, slots: dict, *, run_id: str = "",
             echo(ui.err("whitelist: decision audit unwritable — fail-closed, nothing executed"))
             return {"status": "rejected", "reason": "audit unwritable"}
     try:
+        # spec: progress-logging — the full whitelisted argv, announced before it runs
+        print(ui.activity(f"running: {' '.join(argv)}"), file=sys.stderr)
         proc = runner(argv, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"status": "error", "reason": f"{name}: {exc}", "argv": argv}

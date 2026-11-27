@@ -232,7 +232,7 @@ def test_verbose_cluster_keeps_v_for_emerge(emerge_stub, ok_compat, monkeypatch,
     assert calls() == [["-v", "sys-apps/x", "--pretend"], ["-v", "sys-apps/x"]]  # -v survives everywhere
 
 
-def test_maybe_agent_gated_on_show_reasoning(monkeypatch, tmp_path):
+def test_maybe_agent_gated_on_verbose(monkeypatch, tmp_path):
     from emerge_ai import state
     from emerge_ai.flags import Mode
 
@@ -250,9 +250,9 @@ def test_maybe_agent_gated_on_show_reasoning(monkeypatch, tmp_path):
     run = state.new_run(["-v"], Mode())
     run.incident = {"class": "block"}
     cli._maybe_agent(run, str(cfg))
-    assert captured[-1] == {"show_reasoning": False}
-    cli._maybe_agent(run, str(cfg), show_reasoning=True)
-    assert captured[-1] == {"show_reasoning": True}
+    assert captured[-1] == {"verbose": False}
+    cli._maybe_agent(run, str(cfg), verbose=True)
+    assert captured[-1] == {"verbose": True}
 
 
 # --- interactive operator question channel reaches the agent (spec: agent-loop-consent) ---

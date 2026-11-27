@@ -39,9 +39,14 @@ def run_emerge_capturing(
     (spec: console-output); the returned buffer holds both sides ANSI-stripped,
     in read order (not cross-stream normalized), because it feeds parsing and
     the LLM (design D5). Undecodable bytes are replaced, never fatal, and the
-    text never carries surrogates (spec: console-output, replace-not-crash)."""
+    text never carries surrogates (spec: console-output, replace-not-crash).
+
+    Every launch is announced on stderr with the full argv (spec:
+    progress-logging); the announcement never touches stdout."""
+    argv = [emerge_binary, *with_color_flag(emerge_args)]
+    print(ui.activity(f"running: {' '.join(argv)}"), file=sys.stderr)
     proc = subprocess.Popen(
-        [emerge_binary, *with_color_flag(emerge_args)],
+        argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={**os.environ, **env} if env else None,

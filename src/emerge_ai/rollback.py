@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tarfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from emerge_ai import ui
 from emerge_ai.plan import Plan
 from emerge_ai.tiers import snapshot_required
 
@@ -95,6 +97,9 @@ def _register(prot: Protection, plan: Plan | None, snap_base: str) -> None:
 
 
 def _default_btrfs(args: list[str]) -> str:
+    # spec: progress-rollback visibility (progress-logging): snapshot/delete is a
+    # significant action; the findmnt probe in detect_root_fs stays silent
+    print(ui.activity(f"running: btrfs {' '.join(args)}"), file=sys.stderr)
     proc = subprocess.run(["btrfs", *args], capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"btrfs {' '.join(args)}: {proc.stderr.strip()}")
@@ -251,6 +256,8 @@ def restore_archive(prot: Protection, target_root: str | str = "/") -> str:
     target_root, replacing the files the merge touched."""
     if not prot.archive_dir:
         raise ValueError("no archive to restore")
+    print(ui.activity(f"restoring archive {prot.archive_dir} into {target_root}"),
+          file=sys.stderr)
     root = Path(target_root)
     count = 0
     with tarfile.open(Path(prot.archive_dir) / "files.tar") as tar:

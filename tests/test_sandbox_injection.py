@@ -46,6 +46,39 @@ def test_run_readonly_allowlist(jail, tmp_path):
     assert out["returncode"] == 0 and "4999" in out["output"]
 
 
+def test_run_readonly_announces_allowed_silences_blocked(jail, tmp_path, capsys):
+    # spec: progress-logging — allowed command announced before it runs; a call
+    # rejected by the allowlist never reaches the terminal as an announcement
+    with pytest.raises(BinaryNotAllowed):
+        jail.run_readonly(["rm", "-rf", str(tmp_path)])
+    assert "emerge-ai:" not in capsys.readouterr().err
+    jail.run_readonly(["wc", "-l", jail.roots[0] + "/build.log"])
+    assert f"emerge-ai: running: wc -l {jail.roots[0]}/build.log" in capsys.readouterr().err
+
+
+def test_web_fetch_announces_https_only(monkeypatch, capsys):
+    import io
+
+    import urllib.request
+
+    from emerge_ai.sandbox import Sandbox
+
+    class _Body(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: _Body(b"hello"))
+    sb = Sandbox(roots=("/tmp",))
+    assert "only https" in sb.web_fetch("http://insecure.example/")["error"]
+    assert "emerge-ai:" not in capsys.readouterr().err  # rejected fetch stays silent
+    res = sb.web_fetch("https://example.org/news")
+    assert res["content"] == "hello"
+    assert "emerge-ai: fetch: https://example.org/news" in capsys.readouterr().err
+
+
 def test_pretend_emerge_hypothesis(tmp_path, emerge_stub):
     binary, calls = emerge_stub
     sb = Sandbox(roots=(str(tmp_path),), emerge_binary=binary)

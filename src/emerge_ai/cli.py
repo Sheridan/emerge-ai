@@ -55,11 +55,11 @@ def _compat_gate() -> int | None:
     return None
 
 
-def _make_tier_service(cfg: Config, cache_path=None, show_reasoning=False):
+def _make_tier_service(cfg: Config, cache_path=None, verbose=False):
     client = None
     if cfg.endpoint:
         try:
-            client = LLMClient(cfg, show_reasoning=show_reasoning)
+            client = LLMClient(cfg, verbose=verbose)
         except LLMError as exc:
             print(ui.warn(f"{exc}; tiers fall back to conservative"), file=sys.stderr)
     return TierService(client, cache_path=cache_path)
@@ -535,7 +535,7 @@ def _call_agent_fn(agent_fn, incident: dict, interactive: bool):
 
 
 def _maybe_agent(
-    run, config_path, agent_fn=None, show_reasoning=False, interactive: bool = False,
+    run, config_path, agent_fn=None, verbose=False, interactive: bool = False,
     sandbox=None,
 ) -> str | None:
     if not run.incident:
@@ -558,7 +558,7 @@ def _maybe_agent(
             from emerge_ai.agent import IncidentAgent
             from emerge_ai.prompts import collect_context
 
-            client = LLMClient(cfg, show_reasoning=show_reasoning)
+            client = LLMClient(cfg, verbose=verbose)
             info = portage_compat.emerge_info()
             agent = IncidentAgent(
                 client,
@@ -568,7 +568,7 @@ def _maybe_agent(
             )
             proposal = agent.propose(
                 run.incident,
-                render_to=sys.stderr if show_reasoning else None,
+                render_to=sys.stderr if verbose else None,
                 interactive=interactive,
             ).proposal
         print(ui.info("agent proposal:"), file=sys.stderr)
@@ -618,7 +618,7 @@ def _pkg_docs(sandbox, path: str) -> list[tuple[str, str]]:
 
 
 def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None,
-              show_reasoning=False, paths=None, require_after_build: bool = True) -> None:
+              verbose=False, paths=None, require_after_build: bool = True) -> None:
     """config-protect handling. `require_after_build=False` is the plan-phase
     `needs updating` entry: an explicit consented finding, independent of the
     etc_update_after_build policy flag (spec: etc-update-llm)."""
@@ -659,7 +659,7 @@ def _etc_flow(run, config_path, *, llm=True, input_fn=input, client_factory=None
         # not a precondition for the LLM decision)
         docs = etcupdate.collect_docs(current, web_fetch=None if sandbox is None else lambda p: _pkg_docs(sandbox, p))
         try:
-            decision = etcupdate.llm_decide(client_factory(cfg, show_reasoning=show_reasoning), newp, current, docs, cfg.resolved_language())
+            decision = etcupdate.llm_decide(client_factory(cfg, verbose=verbose), newp, current, docs, cfg.resolved_language())
         except Exception as exc:  # now genuinely LLM-only (design D4)
             print(ui.err(f"etc LLM unavailable: {exc}"), file=sys.stderr)
             continue
@@ -710,7 +710,7 @@ def _resolve_resume(emerge_args: list[str], mode, runs_dir) -> tuple[state.RunSt
     return run, [a for a in emerge_args if a != "--resume"]
 
 
-def _post_run_digest(run, output, config_path, runs_dir) -> None:
+def _post_run_digest(run, output, config_path, runs_dir, verbose: bool = False) -> None:
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
@@ -721,7 +721,7 @@ def _post_run_digest(run, output, config_path, runs_dir) -> None:
         # automatic changelog digest after a successful run (spec: run-reporting);
         # source or LLM failures must not touch the run's exit code
         try:
-            client = LLMClient(cfg) if cfg.endpoint else None
+            client = LLMClient(cfg, verbose=verbose) if cfg.endpoint else None
             text = changelog.collect_digest(
                 gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir,
                 client=client, packages=[e["cpv"] for e in run.plan],
@@ -735,12 +735,12 @@ def _post_run_digest(run, output, config_path, runs_dir) -> None:
             print(ui.warn(f"changelog digest skipped: {exc}"), file=sys.stderr)
 
 
-def _changelog_mode(config_path, show_reasoning=False) -> int:
+def _changelog_mode(config_path, verbose=False) -> int:
     try:
         cfg = load_config(config_path)
     except (ConfigError, FileNotFoundError):
         cfg = Config()
-    client = LLMClient(cfg, show_reasoning=show_reasoning) if cfg.endpoint else None
+    client = LLMClient(cfg, verbose=verbose) if cfg.endpoint else None
     text = changelog.collect_digest(
         gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir, client=client
     )
@@ -866,7 +866,7 @@ def main(
         else:
             state.save_run(run, runs_dir)
         proposal = _maybe_agent(
-            run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
+            run, config_path, agent_fn, verbose=verbose, interactive=interactive
         )
         run.agent_proposal = proposal
         applied = None
@@ -918,7 +918,7 @@ def main(
     state.save_run(run, runs_dir)
     try:
         cfg = load_config(config_path)
-        tier_service = _make_tier_service(cfg, cache_path=tiers_cache, show_reasoning=verbose)
+        tier_service = _make_tier_service(cfg, cache_path=tiers_cache, verbose=verbose)
         # reuse the pretend run we already captured; only unparseable output
         # (quiet formats) pays for the resolver again (avoid-double-resolve)
         plan = build_plan_from_output(output, emerge_args, tier_service, fallback=plan_fn)
@@ -926,7 +926,7 @@ def main(
         state.save_run(run, runs_dir)
         summarize = None
         if cfg.endpoint:  # LLM summary atop the deterministic core (spec: run-reporting)
-            _llm = LLMClient(cfg, show_reasoning=verbose)
+            _llm = LLMClient(cfg, verbose=verbose)
 
             def summarize(messages, _c=_llm):
                 return _c.chat(messages)
@@ -956,7 +956,7 @@ def main(
             if unread:
                 news_summarize = None
                 if cfg.endpoint:
-                    _news_llm = LLMClient(cfg, show_reasoning=verbose)
+                    _news_llm = LLMClient(cfg, verbose=verbose)
 
                     def news_summarize(messages, _c=_news_llm):
                         return _c.chat(messages)
@@ -988,7 +988,7 @@ def main(
                 roots=tuple(DEFAULT_JAIL_ROOTS)
                 + ((os.path.dirname(artifact_path),) if artifact_path else ())
             )
-            _maybe_agent(run, config_path, agent_fn, show_reasoning=verbose,
+            _maybe_agent(run, config_path, agent_fn, verbose=verbose,
                          interactive=False, sandbox=sandbox)
         state.transition(run, state.DONE, runs_dir)
         return 0
@@ -1001,7 +1001,7 @@ def main(
         consent_analyze = None
         if cfg is not None and cfg.endpoint:
             try:
-                consent_client = LLMClient(cfg, show_reasoning=verbose)
+                consent_client = LLMClient(cfg, verbose=verbose)
 
                 def consent_analyze(text, specs, _c=consent_client):  # noqa: F811
                     """Free-text -> model channel: comment + order by keys; the
@@ -1043,7 +1043,7 @@ def main(
                 # (spec: etc-update-llm) — that flag governs post-build only
                 _etc_flow(run, config_path,
                           llm=consent_analyze is not None,
-                          show_reasoning=verbose, paths=[pending],
+                          verbose=verbose, paths=[pending],
                           require_after_build=False)
             run.consent_repairs.append({"variant": spec.key, "action": act})
 
@@ -1146,7 +1146,7 @@ def main(
             run.incident = build_incident(rc, output, merge_args)
             state.transition(run, state.INCIDENT, runs_dir)
             proposal = _maybe_agent(
-                run, config_path, agent_fn, show_reasoning=verbose, interactive=interactive
+                run, config_path, agent_fn, verbose=verbose, interactive=interactive
             )
             run.agent_proposal = proposal
             applied = None
@@ -1182,7 +1182,7 @@ def main(
             for line in (cleanup_fn or rollback_mod.cleanup)(prot):
                 print(ui.ok(line), file=sys.stderr)
         state.transition(run, state.DONE, runs_dir)
-        _post_run_digest(run, output, config_path, runs_dir)
+        _post_run_digest(run, output, config_path, runs_dir, verbose)
         if applied is not None:  # merge failure repaired -> the one entry (D1)
             _journal_verified_fix(run, applied, merge_args)
         for rep in run.consent_repairs:  # consent fixes the merge just verified
@@ -1197,7 +1197,7 @@ def main(
             executor=rollback_executor,
         )
         if ask:
-            _etc_flow(run, config_path, show_reasoning=verbose)
+            _etc_flow(run, config_path, verbose=verbose)
         else:
             _etc_flow(run, config_path, llm=False)
     state.save_run(run, runs_dir)

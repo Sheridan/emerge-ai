@@ -547,6 +547,13 @@ class IncidentAgent:
                 return {"error": "tool-call budget exhausted; answer with what you have"}
             result.tool_calls_used += 1
             result.trace.append((name, args))
+            # spec: progress-logging — announce the call (capped args) before running it
+            print(
+                ui.activity(
+                    f"tool: {name}({ui.clip(json.dumps(args, ensure_ascii=False), 200)})"
+                ),
+                file=sys.stderr,
+            )
             try:
                 if name == "read_file_window":
                     limit = int(args.get("limit", 200))

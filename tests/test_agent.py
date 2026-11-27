@@ -115,6 +115,18 @@ def test_agent_unit_flow_and_wrapping(jail):
     assert any("injection patterns" in r for r in wrapped)
 
 
+def test_dispatch_announces_tool_calls_with_capped_args(jail, capsys):
+    # spec: progress-logging — every tool-call is announced (args capped) before it runs
+    sb, log = jail
+    client = ScriptedClient([{"grep_log": {"path": log, "pattern": "x" * 300}}])
+    agent = IncidentAgent(client, sb, rules="R", max_rounds=6)
+    result = agent.propose(incident(log))
+    err = capsys.readouterr().err
+    line = next(l for l in err.splitlines() if l.startswith("emerge-ai: tool: grep_log("))
+    assert "[capped," in line and len(line) < 320  # 200-char cap + marker + prefix
+    assert [t[0] for t in result.trace] == ["grep_log"]
+
+
 def test_agent_propose_renders_rounds_to_stream(jail):
     import io
 

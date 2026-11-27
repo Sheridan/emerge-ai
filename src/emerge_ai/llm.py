@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import urllib.request
 from dataclasses import dataclass, field
 
 from emerge_ai import ui
 from emerge_ai.config import Config, ConfigError, require_endpoint
+
+# Verbose request dumps are capped so a huge prompt never floods the terminal;
+# the cap is marked explicitly in the dump (spec: progress-logging).
+REQUEST_DUMP_LIMIT = 8000
 
 
 @dataclass
@@ -61,14 +66,32 @@ def try_structured(reply: str) -> dict | None:
 
 
 class LLMClient:
-    def __init__(self, cfg: Config, timeout: float = 240.0, *, show_reasoning: bool = False):
+    def __init__(self, cfg: Config, timeout: float = 240.0, *, verbose: bool = False,
+                 stream=None):
         self.cfg = cfg
-        self.show_reasoning = show_reasoning
+        # -v/--verbose: payload dumps now, reasoning output too (change
+        # fix-verbose-thinking-output) — one knob for "show me the details".
+        self.verbose = verbose
+        # announcement seam: stderr by default, tests inject a buffer
+        self.stream = stream
         try:
             self.base = require_endpoint(cfg).rstrip("/")
         except ConfigError as exc:
             raise LLMError(str(exc)) from exc
         self.timeout = timeout
+
+    def _announce(self, msg: str) -> None:
+        """One progress-logging line on stderr (spec: progress-logging)."""
+        print(ui.activity(msg), file=self.stream or sys.stderr)
+
+    def _dump_request(self, payload: dict) -> str:
+        """Verbose request dump (spec: progress-logging): the JSON payload
+        only — headers are never dumped; an api_key value that leaked into
+        message text is masked; the dump is capped with an explicit marker."""
+        text = json.dumps(payload, ensure_ascii=False)
+        if self.cfg.api_key:
+            text = text.replace(self.cfg.api_key, "***")
+        return ui.clip(text, REQUEST_DUMP_LIMIT)
 
     def chat(
         self,
@@ -84,6 +107,12 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        self._announce(
+            f"sending request to LLM (model={payload['model']}, "
+            f"{len(messages)} messages, tools={len(tools or [])})"
+        )
+        if self.verbose:
+            self._announce(f"request payload: {self._dump_request(payload)}")
         body = json.dumps(payload).encode()
         headers = {"Content-Type": "application/json"}
         if self.cfg.api_key:
@@ -91,12 +120,18 @@ class LLMClient:
         req = urllib.request.Request(
             f"{self.base}/chat/completions", data=body, headers=headers, method="POST"
         )
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 data = json.load(resp)
         except Exception as exc:
             raise LLMError(f"emerge-ai: LLM request failed: {exc}") from exc
-        return self._parse(data)
+        parsed = self._parse(data)
+        self._announce(
+            f"LLM answered in {time.monotonic() - started:.1f}s"
+            f" (finish={parsed.finish_reason or 'unknown'})"
+        )
+        return parsed
 
     @staticmethod
     def _parse(data: dict) -> Response:
@@ -125,7 +160,7 @@ class LLMClient:
         Colors come from cfg.llm_colors; non-TTY streams get plain text (spec: console-output)."""
         stream = sys.stderr if stream is None else stream
         palette = ui.resolve_palette(getattr(self.cfg, "llm_colors", None))
-        if self.show_reasoning and resp.reasoning:
+        if self.verbose and resp.reasoning:
             print(
                 ui.paint(stream, ui.color_sgr(palette["reasoning"]), f"[reasoning] {resp.reasoning}"),
                 file=stream,

@@ -134,9 +134,9 @@ def test_repair_ladder_journals_then_finds_precedent(repair_stub, ok_compat, mon
     class SpyClient:
         """Настоящий strata + запись промптов: прецедент обязан дойти до модели."""
 
-        def __init__(self, cfg_, show_reasoning=False):
+        def __init__(self, cfg_, verbose=False):
             from emerge_ai.llm import LLMClient
-            self._real = LLMClient(cfg_, show_reasoning=show_reasoning)
+            self._real = LLMClient(cfg_, verbose=verbose)
 
         def chat(self, messages, tools=None, temperature=0.2):
             prompts.append(list(messages))

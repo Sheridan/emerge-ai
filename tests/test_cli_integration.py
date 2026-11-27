@@ -335,7 +335,7 @@ def test_agent_limit_noninteractive_cli_audits_and_never_asks(emerge_stub, ok_co
     cfg.write_text('{"endpoint": "http://127.0.0.1:9/v1", "model": "m"}')
 
     class TruncatingClient:
-        def __init__(self, cfg, show_reasoning=False):
+        def __init__(self, cfg, verbose=False):
             pass
 
         def chat(self, messages, tools=None, temperature=0.2):
@@ -601,7 +601,7 @@ def test_plan_phase_llm_summary_with_endpoint(emerge_stub, ok_compat, monkeypatc
     seen = []
 
     class FakeClient:
-        def __init__(self, cfg, show_reasoning=False):
+        def __init__(self, cfg, verbose=False):
             pass
 
         def chat(self, messages):
@@ -654,7 +654,7 @@ def test_pretend_degraded_without_endpoint_deterministic_only(emerge_stub, ok_co
     cfg.write_text("{}")
     monkeypatch.setenv("EMERGE_AI_CONFIG", str(cfg))
 
-    def no_client(cfg, show_reasoning=False):
+    def no_client(cfg, verbose=False):
         raise AssertionError("LLMClient must not be built without endpoint")
 
     monkeypatch.setattr(cli, "LLMClient", no_client)
@@ -696,7 +696,7 @@ class _JsonDigestClient:
 
     n = 0
 
-    def __init__(self, cfg, show_reasoning=False):
+    def __init__(self, cfg, verbose=False):
         pass
 
     def chat(self, messages, **kw):
@@ -789,7 +789,7 @@ def test_plan_phase_no_llm_summary_without_endpoint(emerge_stub, ok_compat, monk
     cfg = tmp_path / "cfg.json"
     cfg.write_text("{}")
 
-    def no_client(cfg, show_reasoning=False):
+    def no_client(cfg, verbose=False):
         raise AssertionError("LLMClient must not be built without endpoint")
 
     monkeypatch.setattr(cli, "LLMClient", no_client)
@@ -833,7 +833,7 @@ def test_post_run_changelog_on_saves_report(emerge_stub, ok_compat, monkeypatch,
     runs.mkdir()
 
     class FakeClient:
-        def __init__(self, cfg, show_reasoning=False):
+        def __init__(self, cfg, verbose=False):
             pass
 
         def chat(self, messages):
@@ -851,11 +851,45 @@ def test_post_run_changelog_on_saves_report(emerge_stub, ok_compat, monkeypatch,
     assert any(r.changelog and "OpenSSL" in r.changelog for r in saved)
 
 
+def test_verbose_reaches_post_run_changelog_client(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
+    """-v must reach the post-run changelog client (spec: progress-logging):
+    the verbose payload dump shows up with -av and is absent with -a."""
+    import sys
+
+    binary, _ = emerge_stub
+    cfg = _changelog_cfg(tmp_path, changelog_digest=True, endpoint="http://localhost:1/v1")
+
+    class DumpingClient:
+        def __init__(self, cfg, verbose=False):
+            self.verbose = verbose
+
+        def chat(self, messages, **kw):
+            if self.verbose:
+                print('emerge-ai: request payload: {"model": "m"}', file=sys.stderr)
+            return type("R", (), {"content": "- OpenSSL upgrade needed"})()
+
+    monkeypatch.setattr(cli, "LLMClient", DumpingClient)
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-av", "app-misc/foo"],
+                  str(binary), config_path=str(cfg), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "request payload" in err and "changelog digest" in err
+
+    capsys.readouterr()
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
+                  str(binary), config_path=str(cfg), runs_dir=str(tmp_path / "runs2"),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    err2 = capsys.readouterr().err
+    assert "request payload" not in err2 and "changelog digest" in err2
+
+
 def test_post_run_changelog_without_endpoint_is_raw(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):
     binary, calls = emerge_stub
     cfg = _changelog_cfg(tmp_path, changelog_digest=True)
 
-    def no_client(cfg, show_reasoning=False):
+    def no_client(cfg, verbose=False):
         raise AssertionError("no LLMClient without endpoint")
 
     monkeypatch.setattr(cli, "LLMClient", no_client)
@@ -1142,7 +1176,7 @@ def _repair_agent(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
 
     class ProposalClient:
-        def __init__(self, cfg, show_reasoning=False):
+        def __init__(self, cfg, verbose=False):
             pass
 
         def chat(self, messages, tools=None, temperature=0.2):
@@ -1666,7 +1700,7 @@ def test_mutation_report_carries_llm_news_digest(emerge_stub, ok_compat, monkeyp
     seen = []
 
     class FakeNewsClient:
-        def __init__(self, cfg, show_reasoning=False):
+        def __init__(self, cfg, verbose=False):
             pass
 
         def chat(self, messages, **kw):

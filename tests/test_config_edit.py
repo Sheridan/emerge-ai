@@ -126,3 +126,15 @@ def test_remove_by_run_deletes_only_that_run(tmp_path):
     # idempotent: nothing more to remove, files untouched
     assert config_edit.remove_by_run("run77", etc_dir=tmp_path) == []
     assert config_edit.remove_by_run("", etc_dir=tmp_path) == []
+
+
+def test_writes_are_announced(tmp_path, capsys):
+    # spec: progress-logging — which file gains which line/patch (stderr only)
+    config_edit.apply_package_edit(
+        "use", "dev-libs/foo static-libs", reason="needs static", journal_id="j1",
+        etc_dir=tmp_path, now=D)
+    assert (f"emerge-ai: editing {tmp_path}/package.use: + dev-libs/foo static-libs"
+            in capsys.readouterr().err)
+    path = config_edit.apply_user_patch("dev-libs", "foo", "--- a\n+++ b\n",
+                                        reason="patch", patches_dir=tmp_path, now=D)
+    assert f"emerge-ai: writing patch {path}" in capsys.readouterr().err

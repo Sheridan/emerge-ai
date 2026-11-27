@@ -132,7 +132,14 @@ def test_streams_routed_to_matching_streams(tmp_path, capfd):
     captured = capfd.readouterr()
     # our stdout carries ONLY emerge's stdout, byte-for-byte with ANSI (D: spec)
     assert captured.out == "\x1b[32mOUT-ONE\x1b[0m\nOUT-TWO\n"
-    assert captured.err == "\x1b[33mERR-ONE\x1b[0m\nERR-TWO\n"
+    # our stderr is emerge's stderr byte-for-byte, plus emerge-ai's own
+    # progress-logging line for the launch (spec: progress-logging)
+    lines = captured.err.splitlines(keepends=True)
+    announced = [l for l in lines if l.startswith("emerge-ai: ")]
+    assert announced == [f"emerge-ai: running: {tmp_path}/emerge -p app-misc/split\n"]
+    assert "".join(l for l in lines if not l.startswith("emerge-ai: ")) == (
+        "\x1b[33mERR-ONE\x1b[0m\nERR-TWO\n"
+    )
     # merged ANSI-stripped buffer feeds incident/enrich
     assert "OUT-ONE" in buf and "OUT-TWO" in buf and "ERR-ONE" in buf and "ERR-TWO" in buf
     assert "\x1b" not in buf
@@ -173,3 +180,16 @@ def test_reader_thread_error_propagates(tmp_path, capfd, monkeypatch):
     monkeypatch.setattr(runner_ui, "strip_ansi", flaky)
     with pytest.raises(RuntimeError, match="reader boom"):
         run_emerge_capturing(["-p", "app-misc/split"], emerge_binary=str(_split_stub(tmp_path)))
+
+
+def test_launch_announced_on_stderr_never_on_stdout(tmp_path, capfd):
+    # spec: progress-logging — full argv announced before the launch; emerge's
+    # stdout passthrough stays byte-identical
+    path = tmp_path / "emerge"
+    path.write_text(ANSI_STUB)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    rc, _ = run_emerge_capturing(["-av", "app-misc/foo"], emerge_binary=str(path))
+    captured = capfd.readouterr()
+    assert f"emerge-ai: running: {path} -av app-misc/foo\n" in captured.err
+    assert captured.out == RAW
+    assert "emerge-ai:" not in captured.out
