@@ -865,7 +865,8 @@ def test_verbose_reaches_post_run_changelog_client(emerge_stub, ok_compat, monke
 
         def chat(self, messages, **kw):
             if self.verbose:
-                print('emerge-ai: request payload: {"model": "m"}', file=sys.stderr)
+                print("emerge-ai: request: model=m temperature=0.2 messages=1 "
+                      "tools=0 body=2 chars", file=sys.stderr)
             return type("R", (), {"content": "- OpenSSL upgrade needed"})()
 
     monkeypatch.setattr(cli, "LLMClient", DumpingClient)
@@ -874,7 +875,7 @@ def test_verbose_reaches_post_run_changelog_client(emerge_stub, ok_compat, monke
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 0
     err = capsys.readouterr().err
-    assert "request payload" in err and "changelog digest" in err
+    assert "request: model=m" in err and "changelog digest" in err
 
     capsys.readouterr()
     rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
@@ -882,7 +883,7 @@ def test_verbose_reaches_post_run_changelog_client(emerge_stub, ok_compat, monke
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 0
     err2 = capsys.readouterr().err
-    assert "request payload" not in err2 and "changelog digest" in err2
+    assert "request: model=m" not in err2 and "changelog digest" in err2
 
 
 def test_post_run_changelog_without_endpoint_is_raw(emerge_stub, ok_compat, monkeypatch, tmp_path, capsys):

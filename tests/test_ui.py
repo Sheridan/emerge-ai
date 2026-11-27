@@ -1,4 +1,6 @@
 import io
+import json
+import re
 
 import pytest
 
@@ -240,3 +242,154 @@ def test_echo_answer_goes_to_stream():
     pipe = io.StringIO()
     ui.echo_answer("use --backtrack=50", ui.DEFAULT_LLM_COLORS, pipe)
     assert pipe.getvalue() == "> use --backtrack=50\n"
+
+
+# --- human-readable request dump (spec: progress-logging, design D1-D5) ----
+
+
+def _basic_payload():
+    return {
+        "model": "qwen3.8",
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": "You are an assistant for Gentoo"},
+            {"role": "user", "content": "Incident context follows\nsecond line"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "pretend_emerge",
+                    "description": "simulate an emerge run",
+                    "parameters": {"properties": {"category": {}, "flags": {}}},
+                },
+            }
+        ],
+    }
+
+
+def _assert_no_json_syntax(lines):
+    for line in lines:
+        assert "{" not in line and "}" not in line, line
+        assert '\\"' not in line, line
+
+
+def test_render_request_header_line():
+    lines = ui.render_request(_basic_payload())
+    first = lines[0]
+    assert first.startswith("request: ")
+    assert "model=qwen3.8" in first and "temperature=0.2" in first
+    assert "messages=2" in first and "tools=1" in first
+    assert "body=" in first and first.endswith("chars")
+
+
+def test_render_request_one_block_per_message():
+    lines = ui.render_request(_basic_payload())
+    system = next(l for l in lines if "[1] system" in l)
+    assert "· 31 chars: You are an assistant for Gentoo" in system
+    user = next(l for l in lines if "[2] user" in l)
+    assert "Incident context follows⏎second line" in user  # newlines fold to ⏎
+    _assert_no_json_syntax(lines)
+
+
+def test_render_request_tool_calls_and_tool_result():
+    payload = _basic_payload()
+    payload["messages"] += [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "pretend_emerge",
+                        "arguments": '{"category": "app-editors/vim"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_0fef95",
+            "content": json.dumps({"ok": True, "stderr_tail": "!!! PORTAGE " * 400}),
+        },
+    ]
+    lines = ui.render_request(payload)
+    call = next(l for l in lines if "tool_calls" in l)
+    assert "[3] assistant" in call
+    assert "pretend_emerge(category=app-editors/vim)" in call
+    result = next(l for l in lines if "[4] tool" in l)
+    assert "call_0fef95" in result
+    assert f"· {ui._dump_num(len(payload['messages'][3]['content']))} chars:" in result
+    assert "[capped, 4800 chars total]" in result  # the field cap is marked
+    _assert_no_json_syntax(lines)
+
+
+def test_render_request_lists_tools_with_descriptions():
+    payload = _basic_payload()
+    payload["tools"].append({"type": "function", "function": {"name": "read_log"}})
+    lines = ui.render_request(payload)
+    assert "  tool[1/2] pretend_emerge — simulate an emerge run (args: category, flags)" in lines
+    assert any(l.startswith("  tool[2/2] read_log") for l in lines)
+
+
+def test_render_request_unknown_fields_stay_key_value():
+    payload = _basic_payload()
+    payload["mystery"] = {"deep": {"deeper": "some value"}, "list": [1, "two"]}
+    lines = ui.render_request(payload)
+    assert any(l.startswith("  mystery:") for l in lines)
+    assert any('deeper="some value"' in l for l in lines)
+    assert any("deep=" in l or "deep:" in l for l in lines)
+    _assert_no_json_syntax(lines)
+
+
+def test_render_request_content_list_parts():
+    payload = _basic_payload()
+    payload["messages"] = [
+        {"role": "user", "content": [{"type": "text", "text": "part one"},
+                                      {"type": "text", "text": "part two"}]}
+    ]
+    lines = ui.render_request(payload)
+    block = next(l for l in lines if "[1] user" in l)
+    assert "part one" in block and "part two" in block
+    _assert_no_json_syntax(lines)
+
+
+def test_render_request_total_cap_marks_truncation():
+    payload = _basic_payload()
+    payload["messages"] = [
+        {"role": "user", "content": f"message {i}: " + "z" * 60} for i in range(64)
+    ]
+    lines = ui.render_request(payload)
+    marker = lines[-1]
+    assert marker.startswith("dump truncated: shown ")
+    assert " of " in marker
+    shown, total = (int(n) for n in re.findall(r"\d+", marker))
+    assert 0 < shown < total
+
+
+def test_render_request_no_truncation_marker_for_small_payload():
+    assert not any("dump truncated" in l for l in ui.render_request(_basic_payload()))
+
+
+def test_render_request_masks_api_key_everywhere():
+    key = "secret-token-42"
+    payload = _basic_payload()
+    payload["messages"] = [
+        {"role": "user", "content": "leaked " + key + " in text"},
+        {"role": "user", "content": key},
+        {"role": "user", "content": "long " + key + " " + "y" * 500},  # key near the cap
+    ]
+    lines = ui.render_request(payload, api_key=key)
+    joined = "\n".join(lines)
+    assert key not in joined
+    assert "***" in joined
+    assert "[capped, 521 chars total]" in joined  # sizes stay truthful
+    _assert_no_json_syntax(lines)
+
+
+def test_render_request_field_limits_are_configurable():
+    lines = ui.render_request(_basic_payload(), field_limit=10, total_limit=200)
+    assert any("[capped," in l for l in lines)
+    assert lines[-1].startswith("dump truncated:")

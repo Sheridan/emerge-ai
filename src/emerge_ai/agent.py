@@ -322,6 +322,9 @@ class AgentResult:
     tool_calls_used: int = 0
     stopped_reason: str = "final"
     variants: list = field(default_factory=list)  # typed executable candidates
+    # the final text was shown live while streaming (design D6): the CLI's
+    # proposal block keeps its header but does not reprint the text
+    displayed: bool = False
 
 
 ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "i686": "x86"}
@@ -686,6 +689,7 @@ class IncidentAgent:
                 result.variants = typed_variants(incident, world=_read_world())
                 return result
         result.proposal = resp.content
+        result.displayed = bool(resp.displayed)
         # whitelist variants travel with the advisory text (wire-agent-apply-loop)
         result.variants = typed_variants(incident, world=_read_world())
         return result

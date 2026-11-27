@@ -552,6 +552,7 @@ def _maybe_agent(
     print(ui.info("incident -> consulting agent (proposal is advisory; executable "
                   "whitelist variants follow below)..."), file=sys.stderr)
     try:
+        shown_live = False
         if agent_fn is not None:
             proposal = _call_agent_fn(agent_fn, run.incident, interactive)
         else:
@@ -566,13 +567,20 @@ def _maybe_agent(
                 context=collect_context(info, cfg.resolved_language()),
                 journal_path=journal.JOURNAL_PATH,
             )
-            proposal = agent.propose(
+            result = agent.propose(
                 run.incident,
                 render_to=sys.stderr if verbose else None,
                 interactive=interactive,
-            ).proposal
+            )
+            proposal = result.proposal
+            shown_live = result.displayed
         print(ui.info("agent proposal:"), file=sys.stderr)
-        ui.paint_llm_block(proposal, cfg.llm_colors, sys.stderr)
+        if shown_live:
+            # the text was already shown line by line while streaming (spec:
+            # однократный показ) — keep the header, skip the reprint
+            print(ui.info("  (the proposal was shown live above)"), file=sys.stderr)
+        else:
+            ui.paint_llm_block(proposal, cfg.llm_colors, sys.stderr)
         return proposal
     except LimitExhausted as exc:
         # a limit hit is not a broken agent (design D5): an agent_fn that

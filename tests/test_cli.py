@@ -232,6 +232,32 @@ def test_verbose_cluster_keeps_v_for_emerge(emerge_stub, ok_compat, monkeypatch,
     assert calls() == [["-v", "sys-apps/x", "--pretend"], ["-v", "sys-apps/x"]]  # -v survives everywhere
 
 
+def test_pretend_verbose_dumps_human_readable_request(emerge_stub, ok_compat, tmp_path, capsys):
+    # spec: progress-logging — `-pv` shows the human-readable dump block in
+    # stderr, never a serialized JSON payload; emerge's stdout stays untouched
+    binary, calls = emerge_stub
+    from emerge_ai.plan import Plan, PlanEntry
+
+    plan = Plan(entries=[PlanEntry("app-misc/x-1.0", 5, "hint")])
+    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    rc = cli.main(["--pretend", "-v", "app-misc/x"], emerge_binary=binary,
+                  runs_dir=str(tmp_path / "runs1"), plan_fn=lambda a, s: plan)
+    verbose = capsys.readouterr()
+    assert rc == 0
+    assert "emerge-ai: request: model=" in verbose.err
+    assert "emerge-ai:   [" in verbose.err  # per-message dump lines, prefixed
+    assert "request payload:" not in verbose.err
+    assert '"model":' not in verbose.err  # no serialized JSON block
+    assert "STUB-OUT line1" in verbose.out  # emerge passthrough intact
+
+    rc2 = cli.main(["--pretend", "app-misc/x"], emerge_binary=binary,
+                   runs_dir=str(tmp_path / "runs2"), plan_fn=lambda a, s: plan)
+    plain = capsys.readouterr()
+    assert rc2 == rc  # exit code unaffected by the dump
+    assert plain.out == verbose.out  # stdout byte-for-byte the same
+    assert "emerge-ai:   [" not in plain.err
+
+
 def test_maybe_agent_gated_on_verbose(monkeypatch, tmp_path):
     from emerge_ai import state
     from emerge_ai.flags import Mode
@@ -253,6 +279,43 @@ def test_maybe_agent_gated_on_verbose(monkeypatch, tmp_path):
     assert captured[-1] == {"verbose": False}
     cli._maybe_agent(run, str(cfg), verbose=True)
     assert captured[-1] == {"verbose": True}
+
+
+def test_maybe_agent_live_proposal_not_reprinted(monkeypatch, tmp_path, capsys):
+    # spec: llm-streaming — a proposal shown live while streaming is not
+    # printed a second time; the block keeps its header and a note instead
+    from emerge_ai import agent as agent_mod, state
+    from emerge_ai.agent import AgentResult
+    from emerge_ai.flags import Mode
+
+    shown = {"displayed": True}
+
+    class FakeAgent:
+        def __init__(self, *a, **kw):
+            pass
+
+        def propose(self, incident, **kw):
+            return AgentResult(proposal="run etc-update first", displayed=shown["displayed"])
+
+    monkeypatch.setattr(agent_mod, "IncidentAgent", FakeAgent)
+    monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "Portage 3.0.82")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://x/v1"}')
+    cfg.chmod(0o600)
+    run = state.new_run(["-v"], Mode())
+    run.incident = {"class": "block"}
+
+    cli._maybe_agent(run, str(cfg), verbose=True)
+    err = capsys.readouterr().err
+    assert "agent proposal:" in err
+    assert "shown live" in err
+    assert "run etc-update first" not in err  # the text itself stays off screen
+
+    shown["displayed"] = False  # no -v / no stream: block as before
+    cli._maybe_agent(run, str(cfg), verbose=True)
+    err = capsys.readouterr().err
+    assert "agent proposal:" in err and "run etc-update first" in err
+    assert "shown live" not in err
 
 
 def test_maybe_agent_system_prompt_carries_resolved_language(monkeypatch, tmp_path):

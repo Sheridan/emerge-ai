@@ -227,12 +227,17 @@ class _StubHTTP(io.BytesIO):
 def _stub_urlopen(monkeypatch, capture, reply=None):
     from emerge_ai import llm as llm_mod
 
+    reply_body = json.dumps(reply or {
+        "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+    })
+
     def fake(req, timeout=None):
         capture["body"] = req.data.decode()
+        capture.setdefault("bodies", []).append(req.data.decode())
         capture["url"] = req.full_url
-        return _StubHTTP(json.dumps(reply or {
-            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
-        }).encode())
+        # a non-streaming endpoint answers every request with the whole JSON,
+        # including the streaming attempt (whose retry then sees the same reply)
+        return _StubHTTP(reply_body.encode())
 
     monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake)
 
@@ -262,24 +267,58 @@ def test_announcements_default_to_stderr(monkeypatch):
     assert "emerge-ai: sending request to LLM" in buf.getvalue()
 
 
-def test_verbose_dumps_request_payload_masks_key_and_caps(monkeypatch):
+def test_verbose_dumps_human_readable_request_masks_key(monkeypatch):
     seen = {}
     _stub_urlopen(monkeypatch, seen)
     cfg = Config(endpoint="http://x/v1", model="m", api_key="secret-token-42")
-    msgs = [{"role": "user", "content": "leaked secret-token-42 in text " + "y" * 9000}]
+    msgs = [{"role": "system", "content": "sys prompt"},
+            {"role": "user", "content": "leaked secret-token-42 in text " + "y" * 9000}]
 
     buf = io.StringIO()
     LLMClient(cfg, verbose=True, stream=buf).chat(msgs)
     out = buf.getvalue()
-    assert "request payload:" in out and '"model": "m"' in out
+    # human-readable block: header line + one prefixed line per message
+    assert "emerge-ai: request: model=m" in out
+    assert "emerge-ai:   [1] system · 10 chars: sys prompt" in out
+    assert "[capped," in out  # the 9 KB prompt field is capped with a marker
+    # the JSON dump is gone: no `request payload:` line, no serialized body
+    assert "request payload:" not in out and '"model": "m"' not in out
     assert "secret-token-42" not in out  # header never dumped, value masked
     assert "***" in out
-    assert "[capped," in out  # the 9 KB prompt dump is capped with a marker
 
     buf2 = io.StringIO()
-    LLMClient(cfg, stream=buf2).chat(msgs)  # no -v: no payload, no leak either
+    LLMClient(cfg, stream=buf2).chat(msgs)  # no -v: no dump lines at all
     out2 = buf2.getvalue()
-    assert "request payload" not in out2 and "secret-token-42" not in out2
+    assert "request:" not in out2 and "emerge-ai:   [" not in out2
+    assert "secret-token-42" not in out2
+
+
+def test_verbose_dump_plain_in_pipe(monkeypatch):
+    # spec «Дамп не мешает окружению прогона»: redirected stderr is plain
+    seen = {}
+    _stub_urlopen(monkeypatch, seen)
+    buf = io.StringIO()  # non-TTY
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=buf).chat([{"role": "user", "content": "u"}])
+    out = buf.getvalue()
+    assert "emerge-ai:   [1] user" in out
+    assert "\x1b" not in out
+
+
+def test_verbose_dump_lines_have_no_json_syntax(monkeypatch):
+    seen = {}
+    _stub_urlopen(monkeypatch, seen, reply={
+        "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]})
+    buf = io.StringIO()
+    msgs = [{"role": "assistant", "content": None,
+             "tool_calls": [{"id": "c1", "type": "function",
+                             "function": {"name": "f", "arguments": '{"a": 1}'}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": '{"ok": true}'}]
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=buf).chat(msgs)
+    for line in buf.getvalue().splitlines():
+        if line.startswith("emerge-ai:   "):  # dump body lines only
+            assert "{" not in line and "}" not in line and '\\"' not in line, line
 
 
 # --- reasoning exactly-once through the tool loop (change fix-verbose-thinking) ---
@@ -298,8 +337,15 @@ def test_tool_loop_prints_each_reasoning_exactly_once(monkeypatch):
         return json.dumps({"choices": [{"message": msg, "finish_reason": finish}]}).encode()
 
     queue = [reply("R1", with_tool_call=True), reply("R2", content="done")]
-    monkeypatch.setattr(llm_mod.urllib.request, "urlopen",
-                        lambda req, timeout=None: _StubHTTP(queue.pop(0)))
+
+    def fake(req, timeout=None):
+        # an endpoint without stream support answers the streaming attempt with
+        # the plain reply; the retry without the flag must get the same reply
+        if json.loads(req.data.decode()).get("stream"):
+            return _StubHTTP(queue[0])
+        return _StubHTTP(queue.pop(0))
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake)
     buf = io.StringIO()
     client = LLMClient(Config(endpoint="http://x/v1"), verbose=True, stream=buf)
     final = run_tool_loop(client, [{"role": "user", "content": "u"}],
@@ -372,3 +418,345 @@ def test_live_reasoning_visibility():
         assert "[reasoning]" in buf_on.getvalue()
     assert "[reasoning]" not in buf_off.getvalue()
     assert "8" in r_on.content + r_off.content
+
+
+# --- live streaming under -v (spec: llm-streaming) --------------------------
+
+from emerge_ai import llm as llm_mod  # noqa: E402  (section-local clarity)
+
+
+class _StubSSE:
+    """SSE response seam (task 1.1, design D8): a context object iterated by
+    byte lines like a streamed urllib reply; cut=True drops the [DONE]
+    terminator to model an aborted stream."""
+
+    def __init__(self, chunks, content_type="text/event-stream", cut=False):
+        data = b"".join(chunks)
+        if cut:
+            data = data.rsplit(b"data: [DONE]", 1)[0]
+        self._data = data
+        self.headers = {"Content-Type": content_type} if content_type else {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def __iter__(self):
+        return iter(io.BytesIO(self._data))
+
+
+def _sse_bytes(*chunk_objs, keepalive=True, done=True):
+    lines = [b": keep-alive\n\n"] if keepalive else []
+    lines += [("data: " + json.dumps(obj) + "\n\n").encode() for obj in chunk_objs]
+    if done:
+        lines.append(b"data: [DONE]\n\n")
+    return lines
+
+
+def _delta_chunks(reasoning="", content="", tool_calls=None, finish="stop",
+                  usage=None, pieces=None):
+    """Split a whole reply into stream deltas (task 1.1 helper): tool-call
+    arguments arrive in halves, the finish_reason rides the last choice."""
+    chunks = []
+    if reasoning:
+        chunks.append({"choices": [{"delta": {"reasoning_content": reasoning}}]})
+    if content:
+        for piece in (pieces or [content]):
+            chunks.append({"choices": [{"delta": {"content": piece}}]})
+    for i, call in enumerate(tool_calls or []):
+        args = call["function"].get("arguments") or ""
+        mid = len(args) // 2
+        chunks.append({"choices": [{"delta": {"tool_calls": [
+            {"index": i, "id": call["id"], "type": "function",
+             "function": {"name": call["function"]["name"],
+                          "arguments": args[:mid]}}]}}]})
+        chunks.append({"choices": [{"delta": {"tool_calls": [
+            {"index": i, "function": {"arguments": args[mid:]}}]}}]})
+    chunks.append({"choices": [{"delta": {}, "finish_reason": finish}]})
+    if usage:
+        chunks.append({"choices": [], "usage": usage})
+    return chunks
+
+
+def _whole_reply(content="", reasoning="", tool_calls=None, finish="stop"):
+    msg = {"content": content, "reasoning_content": reasoning}
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
+    return {"choices": [{"message": msg, "finish_reason": finish}]}
+
+
+def _stub_sse_stream(monkeypatch, calls, chunks_by_stream, plain_reply=None):
+    """urlopen seam: streaming attempts get SSE bytes from chunks_by_stream
+    (popped per stream request); non-stream requests get plain_reply."""
+
+    def fake(req, timeout=None):
+        body = json.loads(req.data.decode())
+        calls.append(body)
+        if body.get("stream"):
+            return chunks_by_stream.pop(0)
+        return _StubHTTP(json.dumps(plain_reply or {
+            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+        }).encode())
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake)
+
+
+# -- SSE iterator (task 1.3) --
+
+
+def test_sse_iterator_skips_keepalive_and_garbage():
+    stats = {"bad": 0, "done": False, "chunks": 0}
+    chunks = _sse_bytes(*_delta_chunks(content="hi"))
+    chunks.insert(2, b"data: {not json at all}\n\n")
+    chunks.insert(3, b"event: message\n\n")
+    got = list(llm_mod._iter_sse(_StubSSE(chunks), stats))
+    assert stats["bad"] == 1 and stats["done"] is True
+    assert stats["chunks"] == len(got) >= 2  # garbage skipped, rest delivered
+
+
+def test_sse_iterator_stream_without_tool_calls_and_no_keepalive():
+    stats = {"bad": 0, "done": False, "chunks": 0}
+    chunks = _sse_bytes({"choices": [{"delta": {"content": "x"}}]},
+                        keepalive=False)
+    got = list(llm_mod._iter_sse(_StubSSE(chunks), stats))
+    assert [c["choices"][0]["delta"]["content"] for c in got] == ["x"]
+    assert stats == {"bad": 0, "done": True, "chunks": 1}
+
+
+# -- accumulator equivalence (task 1.4) --
+
+
+def test_accumulated_stream_equals_parsed_whole():
+    one = {"id": "c1", "type": "function",
+           "function": {"name": "f", "arguments": '{"a": 1}'}}
+    two = {"id": "c2", "type": "function",
+           "function": {"name": "g", "arguments": '{"b": "text", "c": [1, 2]}'}}
+    broken = {"id": "c3", "type": "function",
+              "function": {"name": "h", "arguments": '{"a": '}}
+    cases = [
+        dict(content="hello world", reasoning="think"),
+        dict(reasoning="pure thinking"),
+        dict(content="calling", tool_calls=[one], finish="tool_calls"),
+        dict(tool_calls=[one, two], finish="tool_calls"),
+        dict(content="half an idea", finish="length"),
+        dict(tool_calls=[broken], finish="tool_calls"),  # _raw fallback too
+    ]
+    for case in cases:
+        whole = LLMClient._parse(_whole_reply(**case))
+        streamed, _usage = llm_mod._accumulate(_delta_chunks(**case))
+        assert streamed == whole, case
+    # finish_reason: the last non-empty one wins
+    streamed, _ = llm_mod._accumulate(
+        [{"choices": [{"delta": {"content": "a"}, "finish_reason": None}]},
+         {"choices": [{"delta": {}, "finish_reason": "stop"}]}])
+    assert streamed.finish_reason == "stop"
+
+
+def test_accumulator_collects_usage_outside_response():
+    streamed, usage = llm_mod._accumulate(
+        _delta_chunks(content="x", usage={"prompt_tokens": 10, "completion_tokens": 5}))
+    assert usage == {"prompt_tokens": 10, "completion_tokens": 5}
+    assert not hasattr(streamed, "usage")
+
+
+# -- request body (task 2.1) --
+
+
+def test_stream_flag_sent_only_under_verbose(monkeypatch):
+    seen = {}
+    _stub_urlopen(monkeypatch, seen)
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=io.StringIO()).chat([{"role": "user", "content": "u"}])
+    bodies = [json.loads(b) for b in seen["bodies"]]
+    assert bodies[0]["stream"] is True
+    assert bodies[0]["stream_options"] == {"include_usage": True}
+    assert all("stream" not in b for b in bodies[1:])  # the retry, payload as before
+
+    quiet = {}
+    _stub_urlopen(monkeypatch, quiet)
+    LLMClient(Config(endpoint="http://x/v1"),
+              stream=io.StringIO()).chat([{"role": "user", "content": "u"}])
+    assert len(quiet["bodies"]) == 1
+    assert "stream" not in json.loads(quiet["body"])
+
+
+# -- fallback (tasks 2.2-2.4) --
+
+
+def test_wrong_content_type_retries_once_without_stream(monkeypatch):
+    calls = []
+    _stub_sse_stream(monkeypatch, calls,
+                     [_StubSSE([], content_type="application/json")])
+    buf = io.StringIO()
+    resp = LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+                     stream=buf).chat([{"role": "user", "content": "u"}])
+    assert resp.content == "hi" and not resp.displayed  # run continued
+    assert len(calls) == 2 and "stream" not in calls[1]
+    err = buf.getvalue()
+    assert err.count("event stream") == 1  # one -v warning only
+
+
+def test_stream_supported_refusal_is_remembered(monkeypatch):
+    # tool loop of three calls against a non-streaming endpoint: the refusal
+    # costs one retry total, the later calls are single requests (task 2.3)
+    one = {"id": "c1", "type": "function", "function": {"name": "t", "arguments": "{}"}}
+    replies = [
+        _whole_reply(content="", tool_calls=[one], finish="tool_calls"),
+        _whole_reply(content="", reasoning="R2", tool_calls=[dict(one, id="c2")],
+                     finish="tool_calls"),
+        _whole_reply(content="done"),
+    ]
+    calls = []
+
+    def fake(req, timeout=None):
+        body = json.loads(req.data.decode())
+        calls.append(body)
+        if body.get("stream"):
+            return _StubSSE([], content_type="application/json")
+        return _StubHTTP(json.dumps(replies.pop(0)).encode())
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake)
+    buf = io.StringIO()
+    client = LLMClient(Config(endpoint="http://x/v1"), verbose=True, stream=buf)
+    final = run_tool_loop(client, [{"role": "user", "content": "u"}],
+                          [{"type": "function"}], lambda name, args: {"ok": True},
+                          render_to=buf)
+    assert final.content == "done"
+    assert len(calls) == 4  # 1 refused + 3 plain
+    assert sum(1 for c in calls if c.get("stream")) == 1
+    assert buf.getvalue().count("event stream") == 1
+
+
+def test_abort_after_first_show_is_llm_error_without_retry(monkeypatch):
+    calls = []
+    chunks = _sse_bytes(*_delta_chunks(content="partial answer"))
+    _stub_sse_stream(monkeypatch, calls,
+                     [_StubSSE(chunks, cut=True)],
+                     plain_reply=_whole_reply(content="NEVER"))
+    buf = io.StringIO()
+    client = LLMClient(Config(endpoint="http://x/v1"), verbose=True, stream=buf)
+    with pytest.raises(LLMError) as excinfo:
+        client.chat([{"role": "user", "content": "u"}])
+    assert "stream ended before [DONE]" in str(excinfo.value)
+    assert len(calls) == 1  # no silent duplicate on screen (spec scenario)
+    out = buf.getvalue()
+    assert "partial answer" in out and "NEVER" not in out
+    # the half line is terminated before anything else can be written
+    assert "partial answer\n" in out
+
+
+def test_abort_before_any_show_falls_back(monkeypatch):
+    calls = []
+    _stub_sse_stream(monkeypatch, calls, [_StubSSE([], cut=True)],
+                     plain_reply=_whole_reply(content="late reply"))
+    buf = io.StringIO()
+    resp = LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+                     stream=buf).chat([{"role": "user", "content": "u"}])
+    assert resp.content == "late reply" and len(calls) == 2
+
+
+# -- live presentation (tasks 3.1-3.3) --
+
+
+def test_stream_prints_reasoning_then_content_then_duration(monkeypatch):
+    calls = []
+    _stub_sse_stream(monkeypatch, calls,
+                     [_StubSSE(_sse_bytes(*_delta_chunks(reasoning="think ",
+                                                         content="answer")))])
+    buf = io.StringIO()
+    resp = LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+                     stream=buf).chat([{"role": "user", "content": "u"}])
+    out = buf.getvalue()
+    assert out.index("think") < out.index("answer") < out.index("LLM answered")
+    assert resp.displayed and resp.reasoning == "think " and resp.content == "answer"
+    # duration line exactly once, old substrings intact
+    assert out.count("LLM answered in ") == 1 and "(finish=stop)" in out
+
+
+def test_stream_reasoning_colored_and_plain_in_pipe(monkeypatch):
+    calls = []
+    _stub_sse_stream(monkeypatch, calls,
+                     [_StubSSE(_sse_bytes(*_delta_chunks(reasoning="deep thought")))])
+    tty = TTY()
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=tty).chat([{"role": "user", "content": "u"}])
+    assert "\x1b[2mdeep thought\x1b[0m" in tty.getvalue()
+
+    _stub_sse_stream(monkeypatch, calls,
+                     [_StubSSE(_sse_bytes(*_delta_chunks(reasoning="deep thought")))])
+    pipe = io.StringIO()
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=pipe).chat([{"role": "user", "content": "u"}])
+    out = pipe.getvalue()
+    assert out.count("deep thought") == 1 and "\x1b" not in out
+    assert "[reasoning] deep thought" in out  # the -v marker survives streaming
+
+
+def test_stream_question_line_colored_whole_across_chunks(monkeypatch):
+    calls = []
+    chunks = _sse_bytes(*_delta_chunks(
+        content="hello\nQUESTION: proceed?\nbye",
+        pieces=["hello\nQUEST", "ION: proceed?", "\nbye"]))
+    _stub_sse_stream(monkeypatch, calls, [chunks and _StubSSE(chunks)])
+    tty = TTY()
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=tty).chat([{"role": "user", "content": "u"}])
+    out = tty.getvalue()
+    assert "\x1b[33mQUESTION: proceed?\x1b[0m" in out  # whole line, one color
+    assert "\x1b[36mhello\x1b[0m" in out and "\x1b[36mbye\x1b[0m" in out
+    assert "QUEST\x1b" not in out and "\x1b[33mION" not in out  # no torn paint
+
+
+def test_stream_partial_line_not_glued_to_next_activity(monkeypatch):
+    calls = []
+    _stub_sse_stream(monkeypatch, calls,
+                     [_StubSSE(_sse_bytes(*_delta_chunks(content="no trailing newline")))])
+    buf = io.StringIO()
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=buf).chat([{"role": "user", "content": "u"}])
+    out = buf.getvalue()
+    assert "no trailing newline\nemerge-ai: LLM answered" in out
+
+
+def test_stream_duration_line_appends_usage_tokens(monkeypatch):
+    calls = []
+    _stub_sse_stream(monkeypatch, calls,
+                     [_StubSSE(_sse_bytes(*_delta_chunks(
+                         content="x", usage={"prompt_tokens": 12,
+                                             "completion_tokens": 34})))])
+    buf = io.StringIO()
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=buf).chat([{"role": "user", "content": "u"}])
+    out = buf.getvalue()
+    assert out.count("LLM answered in ") == 1
+    assert "(finish=stop)" in out and "[tokens 12+34]" in out
+
+
+# -- exactly-once through the tool loop (task 3.4) --
+
+
+def test_stream_tool_loop_shows_every_turn_exactly_once(monkeypatch):
+    one = {"id": "c1", "type": "function", "function": {"name": "t", "arguments": "{}"}}
+    calls = []
+    streams = [
+        _StubSSE(_sse_bytes(*_delta_chunks(reasoning="R1", content="",
+                                           tool_calls=[one], finish="tool_calls"))),
+        _StubSSE(_sse_bytes(*_delta_chunks(reasoning="R2", content="done"))),
+    ]
+
+    def fake(req, timeout=None):
+        body = json.loads(req.data.decode())
+        calls.append(body)
+        return streams.pop(0)
+
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen", fake)
+    buf = io.StringIO()
+    client = LLMClient(Config(endpoint="http://x/v1"), verbose=True, stream=buf)
+    final = run_tool_loop(client, [{"role": "user", "content": "u"}],
+                          [{"type": "function"}], lambda name, args: {"ok": True},
+                          render_to=buf)
+    assert final.content == "done"
+    out = buf.getvalue()
+    assert out.count("R1") == 1 and out.count("R2") == 1 and out.count("done") == 1

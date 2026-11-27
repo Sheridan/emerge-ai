@@ -261,20 +261,66 @@ sudo emerge-ai -p app-editors/vim
 #     «emerge-ai: sending request to LLM (model=..., N messages, tools=...)»
 #     до появления LLM-сводки; тел запросов в выводе НЕТ
 
-# 2) детализация при -v:
+# 2) детализация при -v (человекочитаемый дамп запроса):
 sudo emerge-ai -pv app-editors/vim 2>/tmp/verbose.log
-#   → в /tmp/verbose.log: «request payload: {...}» (JSON запроса; при переполнении
-#     — с плашкой [capped, N chars total]) и «LLM answered in X.Xs (finish=...)»;
-#     emerge получил -v без изменений (его собственный вывод не сломан)
+#   → в /tmp/verbose.log блок дампа: первая строка «emerge-ai: request:
+#     model=... temperature=... messages=N tools=M body=X chars», затем по строке
+#     на сообщение «emerge-ai:   [n] роль · N chars: превью», tool-call'ы вида
+#     «tool_calls: имя(key=value)», список инструментов «tool[i/M] имя — описание»;
+#     длинное поле срезано плашкой «…[capped, N chars total]», переполненный блок —
+#     плашкой «dump truncated: shown X of Y lines»; рядом «LLM answered in X.Xs
+#     (finish=...)»; emerge получил -v без изменений (его вывод не сломан)
+#   → сериализованного JSON в дампе нет: ни «request payload:», ни фигурных скобок
+grep -c 'request payload:' /tmp/verbose.log    # 0
+grep -c '[{}]' /tmp/verbose.log                # 0 строк с JSON-фигурными скобками
 
 # 3) секрет не утекает: при api_key в конфиге ни в одном дампе stderr нет ни
-#    значения ключа, ни заголовка Authorization
+#    значения ключа (сравни с literal из конфига), ни заголовка Authorization;
+#    вместо значения — плашка «***», размеры в «N chars» считаются по исходному тексту
+grep -F "$(python -c 'import json;print(json.load(open("/etc/emerge-ai.json"))["api_key"])')" \
+    /tmp/verbose.log                            # пусто
 
 # 4) stdout не тронут: sudo emerge-ai -p app-editors/vim 1>/tmp/out.txt 2>/dev/null
 #    → в /tmp/out.txt только вывод emerge, строк «emerge-ai: running:» нет
 
 # 5) tool-call'и агента (сбойный атом, разбор): до каждого инструмента строка
 #    «emerge-ai: tool: <имя>(<аргументы>)», длинные аргументы срезаны плашкой
+```
+
+## Живой вывод LLM при -v (stream-llm-output-live, выполняет пользователь)
+
+```bash
+# 1) инкрементальный показ под -v:
+sudo emerge-ai -pv app-editors/vim
+#   → рассуждения («[reasoning] ...», тусклый цвет) появляются по мере генерации,
+#     затем основной текст — целыми строками; строка «LLM answered in X.Xs
+#     (finish=...)» выходит ПОСЛЕ всего текста ответа и ровно одна за вызов
+#     (при usage эндпоинта — с плашкой [tokens N+M])
+
+# 2) без -v стриминга нет: запрос однократный, вывод появляется целиком:
+sudo emerge-ai -p app-editors/vim 2>/tmp/quiet.log
+#   → в /tmp/quiet.log нет ни предупреждений про stream, ни «[reasoning]»
+
+# 3) --ask под -v — каждый ход модели ровно один раз:
+sudo emerge-ai -a app-editors/vim -v
+#   → текст каждого хода (рассуждения, ответ, tool-вызовы) напечатан один раз;
+#     финальный блок «agent proposal:» содержит пометку
+#     «(the proposal was shown live above)» и НЕ дублирует текст
+
+# 4) QUESTION-строка в потоке окрашена целиком (TTY, не pipe):
+#   → строка, начинающаяся с «QUESTION:», целиком в question-цвете, несмотря на
+#     доставку фрагментами; в pipe (2>/tmp/x) те же тексты без escape-кодов
+
+# 5) эндпоинт без поддержки потока (подставить временный endpoint, отдающий
+#    обычный JSON на stream:true):
+sudo emerge-ai -pv app-editors/vim 2>/tmp/fallback.log
+#   → ОДНО предупреждение «...; single request instead», ответ показан как
+#     раньше, прогон продолжен; в дампе запроса повтор без «stream»
+#   → при обрыве потока ПОСЛЕ первого показанного фрагмента — ошибка
+#     «LLM request failed», без повтора и без задвоенного текста на экране
+
+# 6) коды выхода и вывод emerge не изменились: см. базовые секции выше
+#    (passthrough stdout, rc) — поведение идентично прогону до изменения
 ```
 
 ## Язык ответов LLM (fix-llm-response-language, выполняет пользователь)
@@ -326,10 +372,11 @@ sudo emerge-ai --ask category/pkg
 #     не переводятся, whitelist-ключи не зависят от языка)
 
 # 2) {"language": "en"} — вопросы на английском; дампы запросов при -v
-#    («request payload:») побайтово совпадают с таковыми до изменения:
+#    (блок «request: ...») совпадают с таковыми до изменения:
 #    в описании ask_operator нет никакой языковой плашки
 sudo emerge-ai --ask category/pkg -v 2>/tmp/ask.log
-grep -o '"description": "Ask the[^"]*"' /tmp/ask.log | head -1  # хвост без плашки
+grep -o 'tool_calls: ask_operator' /tmp/ask.log | head -1        # вызов виден по имени
+grep -o 'tool\[.*ask_operator — Ask the[^·]*' /tmp/ask.log | head -1  # хвост без плашки
 
 # 3) неинтерактив (--noninteractive, pipe): вопросов нет вообще, список
 #    инструментов без ask_operator — язык ни на что не влияет
