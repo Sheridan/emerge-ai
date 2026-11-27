@@ -131,6 +131,17 @@ class LLMClient:
             f"LLM answered in {time.monotonic() - started:.1f}s"
             f" (finish={parsed.finish_reason or 'unknown'})"
         )
+        if self.verbose and parsed.reasoning:
+            # The single reasoning print site (spec: config-prompts, change
+            # fix-verbose-thinking-output): every model call shows thinking
+            # under -v — direct chats included, not just the tool loop.
+            out = self.stream or sys.stderr
+            palette = ui.resolve_palette(getattr(self.cfg, "llm_colors", None))
+            print(
+                ui.paint(out, ui.color_sgr(palette["reasoning"]),
+                         f"[reasoning] {parsed.reasoning}"),
+                file=out,
+            )
         return parsed
 
     @staticmethod
@@ -156,15 +167,12 @@ class LLMClient:
         )
 
     def render(self, resp: Response, stream=None) -> None:
-        """Show reasoning only when verbose mode (-v/--verbose) enabled it; content always.
-        Colors come from cfg.llm_colors; non-TTY streams get plain text (spec: console-output)."""
+        """Content only: reasoning printing lives in chat() now (change
+        fix-verbose-thinking-output), so the tool loop never shows it twice.
+        Colors come from cfg.llm_colors; non-TTY streams get plain text
+        (spec: console-output)."""
         stream = sys.stderr if stream is None else stream
         palette = ui.resolve_palette(getattr(self.cfg, "llm_colors", None))
-        if self.verbose and resp.reasoning:
-            print(
-                ui.paint(stream, ui.color_sgr(palette["reasoning"]), f"[reasoning] {resp.reasoning}"),
-                file=stream,
-            )
         if resp.content:
             ui.paint_llm_block(resp.content, palette, stream)
 

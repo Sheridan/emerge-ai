@@ -293,3 +293,23 @@ sudo emerge-ai --ask category/pkg   # инцидент: proposal агента п
 # 3) "language": "en" — весь LLM-вывод на английском;
 #    "language": "xx" — директива использует значение как есть
 ```
+
+## Рассуждения при -v на каждом вызове (fix-verbose-thinking-output, выполняет пользователь)
+
+```bash
+# 1) сводка дайджеста:
+sudo emerge-ai -pv app-editors/vim 2>/tmp/p.log
+#   → в /tmp/p.log строка «[reasoning] ...» до/рядом с llm summary (endpoint
+#     отдаёт reasoning_content по умолчанию)
+sudo emerge-ai -p app-editors/vim 2>/tmp/q.log
+#   → «[reasoning]» в /tmp/q.log НЕТ
+
+# 2) agent-петля (сбойный атом, интерактив): каждое рассуждение модели
+#    напечатано ровно один раз за ход — дублей «[reasoning]» подряд быть не должно:
+sudo emerge-ai --ask category/pkg 2>/tmp/agent.log
+grep -c '\[reasoning\]' /tmp/agent.log   # совпадает с числом ответов модели
+
+# 3) прочие прямые вызовы при -v: consent-анализ (свободный текст в меню),
+#    etc-update-сверка, changelog-дайджест — везде «[reasoning]» появляется
+#    в stderr; без -v тишина; в pipe цвет не просачивается
+```

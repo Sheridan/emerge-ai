@@ -1749,3 +1749,45 @@ def test_changelog_mode_gets_resolved_language(monkeypatch, tmp_path):
                         lambda **kw: seen.update(kw) or "d")
     assert cli._changelog_mode(str(cfg)) == 0
     assert seen["language"] == "Russian"
+
+
+def test_verbose_shows_reasoning_of_post_run_clients(emerge_stub, ok_compat, monkeypatch,
+                                                    tmp_path, capsys):
+    """-v must surface [reasoning] from the post-run changelog client (spec:
+    config-prompts, change fix-verbose-thinking-output): the print lives in
+    chat(), so every constructed client shows thinking; without -v silence."""
+    import io
+    import json
+
+    from emerge_ai import llm as llm_mod
+
+    binary, _ = emerge_stub
+    cfg = _changelog_cfg(tmp_path, changelog_digest=True, endpoint="http://localhost:1/v1")
+
+    class _Body(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    payload = json.dumps({"choices": [{"message": {
+        "content": "- nothing important", "reasoning_content": "checking news"},
+        "finish_reason": "stop"}]}).encode()
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Body(payload))
+
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-av", "app-misc/foo"],
+                  str(binary), config_path=str(cfg), runs_dir=str(tmp_path / "r1"),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "[reasoning] checking news" in err
+    assert "changelog digest" in err
+
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
+                  str(binary), config_path=str(cfg), runs_dir=str(tmp_path / "r2"),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    err2 = capsys.readouterr().err
+    assert "[reasoning]" not in err2 and "changelog digest" in err2

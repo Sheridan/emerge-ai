@@ -49,15 +49,32 @@ def test_parse_tool_calls_payload():
     assert resp.tool_calls[0].name == "f" and resp.tool_calls[0].arguments == {"a": 1}
 
 
-def test_render_reasoning_only_when_enabled():
-    resp = Response(content="answer", reasoning="because")
+def test_chat_prints_reasoning_only_when_verbose(monkeypatch):
+    # spec: config-prompts — the single print site is chat() itself: every
+    # call shows thinking under -v, direct chats included; quiet without it
+    seen = {}
+    reply = {"choices": [{"message": {"content": "answer", "reasoning_content": "because"},
+                          "finish_reason": "stop"}]}
+    _stub_urlopen(monkeypatch, seen, reply=reply)
     buf_on, buf_off = io.StringIO(), io.StringIO()
-    LLMClient(Config(endpoint="http://x/v1"), verbose=True).render(resp, stream=buf_on)
-    LLMClient(Config(endpoint="http://x/v1")).render(resp, stream=buf_off)
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=buf_on).chat([{"role": "user", "content": "u"}])
+    _stub_urlopen(monkeypatch, seen, reply=reply)
+    LLMClient(Config(endpoint="http://x/v1"),
+              stream=buf_off).chat([{"role": "user", "content": "u"}])
     assert "[reasoning] because" in buf_on.getvalue()
-    assert "answer" in buf_on.getvalue()
     assert "[reasoning]" not in buf_off.getvalue()
-    assert "answer" in buf_off.getvalue()
+    assert "answer" in buf_off.getvalue()  # quiet is reasoning-only, never content
+
+
+def test_render_is_content_only():
+    # render() lost its reasoning branch (change fix-verbose-thinking-output):
+    # the tool loop must not print what chat() already printed
+    resp = Response(content="answer", reasoning="because")
+    buf = io.StringIO()
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True).render(resp, stream=buf)
+    assert "[reasoning]" not in buf.getvalue()
+    assert "answer" in buf.getvalue()
 
 
 class TTY(io.StringIO):
@@ -65,12 +82,34 @@ class TTY(io.StringIO):
         return True
 
 
+def test_chat_reasoning_uses_palette_and_stays_plain_in_pipe(monkeypatch):
+    reply = {"choices": [{"message": {"content": "", "reasoning_content": "think"},
+                          "finish_reason": "stop"}]}
+    seen = {}
+    _stub_urlopen(monkeypatch, seen, reply=reply)
+    tty = TTY()
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=tty).chat([{"role": "user", "content": "u"}])
+    assert "\x1b[2m[reasoning] think\x1b[0m" in tty.getvalue()  # dim, fainter than content
+
+    pipe = io.StringIO()
+    _stub_urlopen(monkeypatch, seen, reply=reply)
+    LLMClient(Config(endpoint="http://x/v1"), verbose=True,
+              stream=pipe).chat([{"role": "user", "content": "u"}])
+    assert "\x1b" not in pipe.getvalue() and "[reasoning] think" in pipe.getvalue()
+
+    off = TTY()
+    _stub_urlopen(monkeypatch, seen, reply=reply)
+    cfg = Config(endpoint="http://x/v1", llm_colors={"reasoning": "off"})
+    LLMClient(cfg, verbose=True, stream=off).chat([{"role": "user", "content": "u"}])
+    assert "[reasoning] think" in off.getvalue() and "\x1b" not in off.getvalue()
+
+
 def test_render_tty_uses_palette_colors():
     resp = Response(content="hello\nQUESTION: init?", reasoning="think")
     buf = TTY()
     LLMClient(Config(endpoint="http://x/v1"), verbose=True).render(resp, stream=buf)
     out = buf.getvalue()
-    assert "\x1b[2m[reasoning] think\x1b[0m" in out
     assert "\x1b[36mhello\x1b[0m" in out
     assert "\x1b[33mQUESTION: init?\x1b[0m" in out
 
@@ -243,6 +282,36 @@ def test_verbose_dumps_request_payload_masks_key_and_caps(monkeypatch):
     assert "request payload" not in out2 and "secret-token-42" not in out2
 
 
+# --- reasoning exactly-once through the tool loop (change fix-verbose-thinking) ---
+
+
+def test_tool_loop_prints_each_reasoning_exactly_once(monkeypatch):
+    from emerge_ai import llm as llm_mod
+
+    def reply(reasoning, content="", with_tool_call=False):
+        msg = {"content": content, "reasoning_content": reasoning}
+        finish = "stop"
+        if with_tool_call:
+            msg["tool_calls"] = [{"id": "c1", "type": "function",
+                                  "function": {"name": "f", "arguments": "{}"}}]
+            finish = "tool_calls"
+        return json.dumps({"choices": [{"message": msg, "finish_reason": finish}]}).encode()
+
+    queue = [reply("R1", with_tool_call=True), reply("R2", content="done")]
+    monkeypatch.setattr(llm_mod.urllib.request, "urlopen",
+                        lambda req, timeout=None: _StubHTTP(queue.pop(0)))
+    buf = io.StringIO()
+    client = LLMClient(Config(endpoint="http://x/v1"), verbose=True, stream=buf)
+    final = run_tool_loop(client, [{"role": "user", "content": "u"}],
+                          [{"type": "function"}], lambda name, args: {"ok": True},
+                          render_to=buf)
+    assert final.content == "done"
+    out = buf.getvalue()
+    # chat printed each turn's reasoning; render (content-only) did not repeat it
+    assert out.count("[reasoning] R1") == 1 and out.count("[reasoning] R2") == 1
+    assert "done" in out
+
+
 # ---------------- live strata replay (design D13: all LLM tests hit strata) ----
 
 
@@ -289,16 +358,16 @@ def test_live_tool_call_loop_executes():
 
 @pytest.mark.integration
 def test_live_reasoning_visibility():
-    on, off = _live_client(verbose=True), _live_client()
     prompt = (
         "A package queue has 3 tiers with 2, 5 and 1 packages. How many total? "
         "Show the number."
     )
+    # chat() is the print seam now: verbose client prints [reasoning] to its
+    # stream as soon as the reply is parsed
     buf_on, buf_off = io.StringIO(), io.StringIO()
+    on, off = _live_client(verbose=True, stream=buf_on), _live_client(stream=buf_off)
     r_on = on.chat([{"role": "user", "content": prompt}])
     r_off = off.chat([{"role": "user", "content": prompt}])
-    on.render(r_on, stream=buf_on)
-    off.render(r_off, stream=buf_off)
     if r_on.reasoning:
         assert "[reasoning]" in buf_on.getvalue()
     assert "[reasoning]" not in buf_off.getvalue()
