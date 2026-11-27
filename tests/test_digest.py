@@ -27,6 +27,24 @@ def test_parse_installed_survives_ansi():
     assert parse_installed(COLORED_MERGE) == ["app-misc/foo-1.2::gentoo"]
 
 
+# live-host shapes (fix-queued-plan-parsing): status flags in the ebuild bracket
+# used to drop whole lines — the post-run digest lost those packages
+MASKED_STATUS_OUT = """Calculating dependencies... done!
+[ebuild     U ~] dev-libs/jemalloc-5.4.0-r2::gentoo [5.3.0::gentoo] USE="stats" 0 KiB
+\x1b[1;32m[ebuild  N    *]\x1b[0m app-misc/yazi-26.9.1::gentoo 2 KiB
+[ebuild     R ~] app-editors/neovim-0.11.2::gentoo [0.11.1::gentoo] 0 KiB
+[blocks B      ] <app-misc/yazi-data-25 ("<app-misc/yazi-data-25 is blocking...")
+"""
+
+
+def test_parse_installed_counts_masked_status_flags():
+    assert parse_installed(MASKED_STATUS_OUT) == [
+        "dev-libs/jemalloc-5.4.0-r2::gentoo",
+        "app-misc/yazi-26.9.1::gentoo",
+        "app-editors/neovim-0.11.2::gentoo",
+    ]
+
+
 def test_post_run_digest_on_colored_output_lists_packages():
     from emerge_ai.flags import Mode
     run = state.new_run(["world"], Mode())

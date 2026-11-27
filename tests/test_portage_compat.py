@@ -55,3 +55,47 @@ def test_resolve_pretend_smoke(capsys):
     merged = list(graph.altlist())
     assert merged, "pretend resolver returned empty merge list"
     assert any("sys-apps/portage" in str(entry) for entry in merged)
+
+
+def test_parse_emerge_opts_owns_the_emerge_option_table():
+    """fix-queued-plan-parsing D2: emerge's own parser maps the user argv;
+    cluster flags reach opts, the set stays in files."""
+    action, opts, files = pc.parse_emerge_opts(["-auDN", "@world"])
+    assert files == ["@world"]
+    assert opts.get("--update") and opts.get("--deep") and opts.get("--newuse")
+
+
+def test_queued_cpvs_drops_installed_and_dedups():
+    """unit half of the seam: portage-shaped entries, no .pkg anywhere."""
+
+    class Pkg:
+        def __init__(self, cpv, installed=False):
+            self.cpv = cpv
+            self.installed = installed
+
+    class G:
+        @staticmethod
+        def altlist():
+            return [Pkg("dev-libs/jemalloc-5.4.0-r2"),
+                    Pkg("sys-libs/ncurses-6.5", installed=True),
+                    Pkg("app-misc/yazi-26.9.1")]
+
+    assert pc.queued_cpvs(G) == ["dev-libs/jemalloc-5.4.0-r2", "app-misc/yazi-26.9.1"]
+
+
+def test_honest_seam_queue_matches_live_resolve():
+    """the queue is the live --pretend schedule: user argv -> emerge's parser
+    -> resolve -> altlist minus installed (a clean host may legitimately have
+    an empty queue)."""
+    action, opts, files = pc.parse_emerge_opts(["-auDN", "@world"])
+    opts["--pretend"] = True
+    opts["--quiet"] = True
+    opts.pop("--ask", None)
+    cfg = pc.load_emerge_config(action=action, args=files, opts=opts)
+    success, graph, _favorites = pc.resolve(cfg)
+    assert success
+    queue = pc.queued_cpvs(graph)
+    scheduled = {getattr(p, "cpv", None) for p in graph.altlist()
+                 if not getattr(p, "installed", False)}
+    assert set(queue) <= {c for c in scheduled if c}
+    assert all("/" in cpv for cpv in queue)

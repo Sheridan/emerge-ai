@@ -7,7 +7,10 @@ import re
 
 from emerge_ai import ui
 
-EBUILD_LINE_RE = re.compile(r"^\[ebuild\s+[NnUuRrFf]*\s*\]\s+(\S+)", re.M)
+# Status bracket content is anything but `]`: the letters (N/U/R/F/f) plus masking
+# flags (`~` `*` `-`) and whatever portage invents next (fix-queued-plan-parsing D1);
+# `_clean_cpv`/dedup keep malformed bracket lines out of the queue anyway.
+EBUILD_LINE_RE = re.compile(r"^\[ebuild\s+[^\]]+\]\s+(\S+)", re.M)
 MERGE_HEAD_RE = re.compile(r"^>>> Emerging \(.*?\) (\S+)", re.M)
 
 

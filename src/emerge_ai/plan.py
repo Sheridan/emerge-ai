@@ -25,35 +25,30 @@ class Plan:
         return distribution([Classification(e.cpv, e.tier, e.tier_source) for e in self.entries])
 
 
-def _iter_installed_tasks(altlist) -> list[str]:
-    cpvs = []
-    for entry in altlist:
-        pkg = getattr(entry, "pkg", None) or getattr(entry, "merge", None)
-        if pkg is None:
-            pkg = entry if isinstance(entry, str) else getattr(entry, "_pkg", None)
-        if pkg is None:
-            continue
-        cpv = str(pkg)
-        if "/" in cpv:
-            cpvs.append(cpv)
-    return cpvs
-
-
 def build_plan(
     emerge_args: list[str],
     tier_service,
     *,
+    parse_opts=portage_compat.parse_emerge_opts,
     load_config=portage_compat.load_emerge_config,
     resolve=portage_compat.resolve,
     system_atoms: set[str] | None = None,
 ) -> Plan:
-    opts = {"--pretend": True, "--quiet": True, "--nodeps": True}
-    args = [a for a in emerge_args if not a.startswith("-")]
-    cfg = load_config(action="build", args=args, opts=opts)
+    """Fallback queue from a resolver run over the user's own argv (spec:
+    run-reporting, design D2/D3). The old `--nodeps`/atom-only call was not an
+    honest seam: its altlist was the whole set closure (every entry
+    'merge'), not what emerge would merge. Parsing the argv through
+    `_emerge.main.parse_opts` and forcing --pretend reproduces emerge's own
+    resolution; the queue is the altlist minus already-installed entries."""
+    action, opts, files = parse_opts(list(emerge_args))
+    opts["--pretend"] = True
+    opts["--quiet"] = True
+    opts.pop("--ask", None)  # a resolver must never ask (cli drops it too)
+    cfg = load_config(action=action, args=files, opts=opts)
     success, graph, _fav = resolve(cfg)
     if not success:
         raise RuntimeError("resolver failed while building plan")
-    cpvs = _iter_installed_tasks(graph.altlist())
+    cpvs = portage_compat.queued_cpvs(graph)
     system_cps = {package_of(a) for a in (system_atoms or set())}
     entries = []
     for cpv in cpvs:

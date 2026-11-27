@@ -39,8 +39,41 @@ def load_emerge_config(action: str, args: list[str], opts: dict):
     return actions.load_emerge_config(action=action, args=args, opts=opts)
 
 
+def parse_emerge_opts(argv: list[str]) -> tuple[str | None, dict, list[str]]:
+    """(action, opts, files) from emerge argv the way emerge itself parses them
+    (fix-queued-plan-parsing D2): `_emerge.main.parse_opts` owns the option
+    table and applies insert_optional_args itself — never pre-apply it. A
+    SystemExit on a rejected flag becomes PortageUnavailable: the caller's
+    argv already ran through the real emerge, so only a cli/portage mismatch
+    can get here."""
+    main_mod = importlib.import_module("_emerge.main")
+    try:
+        action, opts, files = main_mod.parse_opts(list(argv), silent=True)
+    except SystemExit as exc:  # pragma: no cover - depends on host argv
+        raise PortageUnavailable(f"portage rejected emerge argv {argv!r}") from exc
+    return action, dict(opts), list(files)
+
+
+def queued_cpvs(graph) -> list[str]:
+    """cpvs scheduled to merge in a resolved depgraph (fix-queued-plan-parsing
+    D2, verified live): under `--pretend` the altlist filtered by
+    `not installed` is exactly the schedule `emerge -p` would show —
+    `mergelist` stays empty and `--nodeps` turns the altlist into the whole
+    set closure. Tolerates MergeTask-style entries (`entry.pkg`) as well."""
+    cpvs: list[str] = []
+    for entry in graph.altlist():
+        pkg = getattr(entry, "pkg", None) or entry
+        if getattr(entry, "installed", False) or getattr(pkg, "installed", False):
+            continue
+        cpv = str(getattr(pkg, "cpv", pkg) or "")
+        if "/" in cpv and cpv not in cpvs:
+            cpvs.append(cpv)
+    return cpvs
+
+
 def resolve(emerge_config, spinner=None):
-    """Run the resolver (read-only; pass --pretend/--nodeps via opts as needed).
+    """Run the resolver (read-only; pass --pretend and the emerge options via
+    opts — see parse_emerge_opts; never --nodeps for a queue, see queued_cpvs).
 
     Returns (success, depgraph, favorites).
     """

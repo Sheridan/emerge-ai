@@ -1,14 +1,22 @@
-from types import SimpleNamespace
-
 from emerge_ai.plan import Plan, PlanEntry, build_plan
 from emerge_ai.tiers import TierService
+
+
+class FakePackage:
+    """Portage-shaped (fix-queued-plan-parsing D2): a --pretend altlist yields
+    Package-like entries with cpv/installed — no .pkg anywhere."""
+
+    def __init__(self, cpv, installed=False):
+        self.cpv = cpv
+        self.installed = installed
 
 
 class FakeGraph:
     def altlist(self):
         return [
-            SimpleNamespace(pkg="sys-libs/glibc-2.42"),
-            SimpleNamespace(pkg="app-editors/vim-9.1"),
+            FakePackage("sys-libs/glibc-2.42"),
+            FakePackage("app-editors/vim-9.1"),
+            FakePackage("sys-libs/ncurses-6.5", installed=True),  # not scheduled
         ]
 
 
@@ -26,12 +34,21 @@ class FakeConfigLoader:
         return {"action": action, "args": args, "opts": opts}
 
 
+class FakeParseOpts:
+    """_emerge.main.parse_opts-shaped: (action, opts, files) from argv."""
+
+    def __call__(self, argv):
+        opts = {"--update": True, "--deep": True, "--newuse": True, "--ask": True}
+        return None, dict(opts), [a for a in argv if not a.startswith("-")]
+
+
 def test_plan_fixture_distribution(tmp_path):
     resolve = FakeResolve()
     svc = TierService(client=None, cache_path=tmp_path / "t.json")  # glibc hint, vim fallback
     plan = build_plan(
         ["sys-apps/foo"],
         svc,
+        parse_opts=FakeParseOpts(),
         load_config=FakeConfigLoader(),
         resolve=resolve,
     )
@@ -59,6 +76,7 @@ def test_plan_system_membership(tmp_path):
     plan = build_plan(
         ["x"],
         svc,
+        parse_opts=FakeParseOpts(),
         load_config=FakeConfigLoader(),
         resolve=FakeResolve(),
         system_atoms={"app-editors/vim"},
@@ -88,7 +106,7 @@ def _svc(tmp_path):
 def test_build_plan_from_output_matches_resolver(tmp_path):
     from emerge_ai.plan import build_plan_from_output
 
-    resolver_plan = build_plan(["x"], _svc(tmp_path),
+    resolver_plan = build_plan(["x"], _svc(tmp_path), parse_opts=FakeParseOpts(),
                                load_config=FakeConfigLoader(), resolve=FakeResolve())
     parsed = build_plan_from_output(PRETEND, ["x"], _svc(tmp_path),
                                     fallback=lambda a, s: None)
@@ -118,3 +136,43 @@ def test_build_plan_from_output_falls_back_on_unparseable(tmp_path):
         svc = _svc(tmp_path)
         assert build_plan_from_output(junk, ["-q", "x"], svc, fallback=fallback) == "sentinel"
     assert [c[0] for c in calls] == [["-q", "x"]] * 4  # args passed through untouched
+
+
+def test_build_plan_honest_seam_resolves_user_argv_without_nodeps(tmp_path):
+    """spec: run-reporting (queue requirement) — the fallback resolves the
+    user's own argv the way emerge does: no --nodeps (that altlist is the
+    whole set closure), --pretend forced, --ask dropped, queue = altlist
+    minus installed."""
+    resolve = FakeResolve()
+    plan = build_plan(["-uDN", "--ask", "@world"], _svc(tmp_path),
+                      parse_opts=FakeParseOpts(), load_config=FakeConfigLoader(),
+                      resolve=resolve)
+    opts = resolve.cfg_args["opts"]
+    assert "--nodeps" not in opts
+    assert opts["--pretend"] is True and opts["--quiet"] is True
+    assert opts["--update"] is True  # the user's own flags reach the resolver
+    assert "--ask" not in opts
+    assert [e.cpv for e in plan.entries] == ["sys-libs/glibc-2.42", "app-editors/vim-9.1"]
+
+
+# live-host shapes (fix-queued-plan-parsing): masked/keyworded status flags in
+# the bracket, old-version and USE payloads after the cpv, blocks line beside
+PRETEND_MASKED = """These are the packages that would be merged, in order:
+
+[ebuild     U ~] dev-libs/jemalloc-5.4.0-r2::gentoo [5.3.0::gentoo] USE="stats" 0 KiB
+\x1b[32;01m[ebuild  N    *]\x1b[0m app-misc/yazi-26.9.1::gentoo  USE="lua" 2 KiB
+[ebuild     R ~] app-editors/neovim-0.11.2::gentoo [0.11.1::gentoo] 0 KiB
+[blocks B      ] <app-misc/yazi-data-25 ("<app-misc/yazi-data-25 is blocking...")
+
+Total: 3 packages, in 1 segment
+"""
+
+
+def test_build_plan_from_output_counts_masked_status_flags(tmp_path):
+    from emerge_ai.plan import build_plan_from_output
+
+    plan = build_plan_from_output(PRETEND_MASKED, ["-uDN", "@world"], _svc(tmp_path),
+                                  fallback=lambda a, s: None)
+    assert [e.cpv for e in plan.entries] == [
+        "dev-libs/jemalloc-5.4.0-r2", "app-misc/yazi-26.9.1", "app-editors/neovim-0.11.2",
+    ]
