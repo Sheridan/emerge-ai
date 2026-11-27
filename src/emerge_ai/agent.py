@@ -241,11 +241,32 @@ ASK_DIRECTIVE_QUIET = (
 )
 
 
-def tool_specs(interactive: bool = False) -> list[dict]:
-    """Tool list for one proposal run; ask_operator exists only interactively (design D2)."""
-    if interactive:
-        return [*TOOL_SPECS, ASK_TOOL_SPEC]
-    return list(TOOL_SPECS)
+def ask_language_note(language: str) -> str:
+    """Operator-facing fields of ask_operator are tool-call arguments, which the
+    model reads as machine JSON — the general 'respond in X' directive does not
+    reach them (change localize-llm-questions). English/absent returns '' so the
+    prompt stays byte-identical."""
+    lang = str(language or "").strip()
+    if not lang or lang.lower().startswith("en"):
+        return ""
+    return (f" Write the operator-facing text — 'question', each option's 'label' and"
+            f" 'consequences' — in {lang}; JSON keys, whitelist 'key' values and"
+            " commands stay exactly as specified.")
+
+
+def tool_specs(interactive: bool = False, language: str = "English") -> list[dict]:
+    """Tool list for one proposal run; ask_operator exists only interactively (design D2).
+    A configured non-English language pins the language of the question's human fields
+    right in the tool description (change localize-llm-questions)."""
+    if not interactive:
+        return list(TOOL_SPECS)
+    spec = ASK_TOOL_SPEC
+    note = ask_language_note(language)
+    if note:
+        spec = {**ASK_TOOL_SPEC,
+                "function": {**ASK_TOOL_SPEC["function"],
+                             "description": ASK_TOOL_SPEC["function"]["description"] + note}}
+    return [*TOOL_SPECS, spec]
 
 
 def validate_question(question, options) -> str:
@@ -644,7 +665,9 @@ class IncidentAgent:
         while True:
             try:
                 resp = run_tool_loop(
-                    loop_client, messages, tool_specs(interactive), dispatch,
+                    loop_client, messages,
+                    tool_specs(interactive, self.context.get("language", "English")),
+                    dispatch,
                     max_rounds=rounds, render_to=render_to,
                 )
                 break

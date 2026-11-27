@@ -7,9 +7,12 @@ import pytest
 
 from emerge_ai import agent
 from emerge_ai.agent import (
+    ASK_TOOL_SPEC,
     CLASS_SKELETONS,
     TOOL_SPECS,
     IncidentAgent,
+    ask_language_note,
+    tool_specs,
     typed_variants,
     validate_question,
 )
@@ -192,6 +195,56 @@ def test_ask_tool_only_in_interactive_payload(jail):
     IncidentAgent(quiet, sb, rules="R", max_rounds=2).propose(incident(log))
     assert "ask_operator" not in quiet.tool_names
     assert "read_file_window" in quiet.tool_names
+
+
+# --- localize-llm-questions: language note inside the ask_operator spec ------
+
+
+def test_ask_language_note_only_for_non_english():
+    assert ask_language_note("English") == ""
+    assert ask_language_note("english") == ""
+    assert ask_language_note("") == ""
+    assert ask_language_note(None) == ""
+    note = ask_language_note("Russian")
+    assert "Russian" in note
+    # the note pins the human fields and keeps machine fields untouched
+    assert "'question'" in note and "'label'" in note and "'consequences'" in note
+    assert "commands stay" in note
+
+
+def test_tool_specs_english_and_noninteractive_stay_byte_identical():
+    assert tool_specs(False) == list(TOOL_SPECS)
+    assert tool_specs(False, "Russian") == list(TOOL_SPECS)   # no ask at all
+    assert tool_specs(True) == [*TOOL_SPECS, ASK_TOOL_SPEC]
+    assert tool_specs(True, "") == [*TOOL_SPECS, ASK_TOOL_SPEC]
+
+
+def test_tool_specs_localizes_ask_description_only():
+    specs = tool_specs(True, "Russian")
+    assert [s for s in specs if s["function"]["name"] != "ask_operator"] == list(TOOL_SPECS)
+    ask = next(s for s in specs if s["function"]["name"] == "ask_operator")
+    base_desc = ASK_TOOL_SPEC["function"]["description"]
+    assert ask["function"]["description"] == base_desc + ask_language_note("Russian")
+    assert "Russian" in ask["function"]["description"]
+    # the shared constant is copied, never mutated (spec: English byte-identical)
+    assert ASK_TOOL_SPEC["function"]["description"] == base_desc
+    assert "Russian" not in ASK_TOOL_SPEC["function"]["description"]
+
+
+def test_configured_language_reaches_ask_spec(jail):
+    sb, log = jail
+    ctx = {"init": "openrc", "root_fs": "btrfs", "profile": "amd64", "use_flags": "",
+           "emerge_info": "", "language": "Russian"}
+    live = ScriptedClient([])
+    IncidentAgent(live, sb, context=ctx, rules="R", max_rounds=2).propose(
+        incident(log), interactive=True)
+    ask = next(t for t in live.tools_seen if t["function"]["name"] == "ask_operator")
+    assert "in Russian" in ask["function"]["description"]
+
+    plain = ScriptedClient([])
+    IncidentAgent(plain, sb, rules="R", max_rounds=2).propose(incident(log), interactive=True)
+    ask = next(t for t in plain.tools_seen if t["function"]["name"] == "ask_operator")
+    assert ask["function"]["description"] == ASK_TOOL_SPEC["function"]["description"]
 
 
 def test_ask_answer_reaches_model_and_trace(jail):

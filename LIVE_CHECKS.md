@@ -313,3 +313,24 @@ grep -c '\[reasoning\]' /tmp/agent.log   # совпадает с числом о
 #    etc-update-сверка, changelog-дайджест — везде «[reasoning]» появляется
 #    в stderr; без -v тишина; в pipe цвет не просачивается
 ```
+
+## Язык вопросов оператору (localize-llm-questions, выполняет пользователь)
+
+```bash
+# 1) в конфиге {"language": "ru"} и интерактив с реальным сбоем:
+sudo emerge-ai --ask category/pkg
+#   → вопрос агента (question), варианты (label) и последствия (consequences)
+#     на русском; служебная строка выбора «[1..n] choose, [c] own text, [q] quit: »
+#     и все анонсы emerge-ai остаются на английском
+#   → набранный русский/английский ответ работает как прежде (ключи схем
+#     не переводятся, whitelist-ключи не зависят от языка)
+
+# 2) {"language": "en"} — вопросы на английском; дампы запросов при -v
+#    («request payload:») побайтово совпадают с таковыми до изменения:
+#    в описании ask_operator нет никакой языковой плашки
+sudo emerge-ai --ask category/pkg -v 2>/tmp/ask.log
+grep -o '"description": "Ask the[^"]*"' /tmp/ask.log | head -1  # хвост без плашки
+
+# 3) неинтерактив (--noninteractive, pipe): вопросов нет вообще, список
+#    инструментов без ask_operator — язык ни на что не влияет
+```
