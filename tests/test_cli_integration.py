@@ -1720,3 +1720,32 @@ def test_mutation_report_carries_llm_news_digest(emerge_stub, ok_compat, monkeyp
     assert "OpenSSL vulns" in captured_err  # the digest, not just the title
     news_calls = [m for m in seen if any("news briefer" in str(x) for x in m)]
     assert news_calls and "Affected: dev-libs/openssl" in news_calls[0][1]["content"]
+
+
+def test_changelog_digest_gets_resolved_language(emerge_stub, ok_compat, monkeypatch, tmp_path):
+    """Post-run changelog digest must receive the normalized language
+    (spec: config-prompts) — cfg value "ru", prompt directive "Russian"."""
+    binary, _ = emerge_stub
+    cfg = _changelog_cfg(tmp_path, changelog_digest=True, language="ru")
+    seen = {}
+
+    def capture(**kw):
+        seen.update(kw)
+        return "emerge-ai changelog digest (raw):\n- none"
+
+    monkeypatch.setattr(cli.changelog, "collect_digest", capture)
+    rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
+                  str(binary), config_path=str(cfg), runs_dir=str(tmp_path / "runs"),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
+    assert rc == 0
+    assert seen["language"] == "Russian"
+
+
+def test_changelog_mode_gets_resolved_language(monkeypatch, tmp_path):
+    # the explicit --changelog mode resolves the language the same way
+    cfg = _changelog_cfg(tmp_path, language="ru")
+    seen = {}
+    monkeypatch.setattr(cli.changelog, "collect_digest",
+                        lambda **kw: seen.update(kw) or "d")
+    assert cli._changelog_mode(str(cfg)) == 0
+    assert seen["language"] == "Russian"

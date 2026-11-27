@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from emerge_ai import injection, ui
+from emerge_ai import injection, prompts, ui
 
 CFG_SUFFIX_RE = re.compile(r"/\.?_cfg\d{4}_[^/]+$")
 PROTECT_RE = re.compile(r"(?:config protected|etc-update|File protections|\.?_cfg\d{4}_)", re.I)
@@ -106,8 +106,7 @@ def etc_system(language: str) -> str:
         "take-new (package default wins), or merge (preserve user customizations AND adopt "
         "necessary new upstream options). Cite the documented options from the provided docs "
         "or web excerpts for every claim. If evidence is insufficient, choose keep-current. "
-        f"Always respond in {language}: the human-readable fields (reason) are written in "
-        f"{language}; JSON keys and action codes stay exactly as specified."
+        + prompts.language_directive(language, structured=True)
     )
 
 

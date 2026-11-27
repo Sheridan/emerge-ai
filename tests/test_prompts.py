@@ -116,6 +116,27 @@ def test_assemble_contains_rules_context_language(rules_dir):
     assert "respond in russian" in sp
 
 
+# --- the single language directive (spec: config-prompts, design D2) ---------
+
+
+def test_language_directive_plain():
+    d = prompts.language_directive("Russian")
+    assert "respond in Russian" in d
+    assert "JSON keys" not in d  # plain calls say nothing about JSON
+
+
+def test_language_directive_structured_pins_machine_fields():
+    d = prompts.language_directive("Russian", structured=True)
+    assert "respond in Russian" in d
+    assert "Human-readable fields are written in Russian" in d
+    assert "JSON keys and action codes stay exactly as specified" in d
+
+
+def test_assemble_has_exactly_one_language_directive(rules_dir):
+    sp = prompts.assemble_system_prompt("R", prompts.collect_context("info", "Russian"))
+    assert sp.count("Always respond in") == 1  # no double directive
+
+
 def test_write_generated(tmp_path):
     rules = "R"
     path = prompts.write_generated("SP", directory=tmp_path / "gen")

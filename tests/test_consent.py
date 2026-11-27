@@ -249,3 +249,22 @@ def test_analysis_messages_wrap_untrusted_payloads():
     user = msgs[1]["content"]
     assert "consent-menu" in msgs[0]["content"] + user  # provenance markers
     assert "UNTRUSTED" in user.upper()
+
+
+def test_analysis_messages_carry_language_directive():
+    # spec: config-prompts — consent analysis gets the structured directive
+    m = consent.MenuSpec(key="merge", title="merge", kind="merge")
+    msgs = consent.build_analysis_messages([m], "почини мир", language="Russian")
+    system = msgs[0]["content"]
+    assert "respond in Russian" in system
+    assert "JSON keys and action codes stay exactly as specified" in system
+    # absent/unset language keeps an explicit English directive
+    default = consent.build_analysis_messages([m], "fix world")[0]["content"]
+    assert "respond in English" in default
+
+
+def test_parse_analysis_accepts_russian_comment_with_intact_keys():
+    comment, order = consent.parse_analysis(
+        '{"comment": "Мировой файл будет восстановлен из бэкапа", "order": ["merge"]}')
+    assert comment == "Мировой файл будет восстановлен из бэкапа"
+    assert order == ["merge"]

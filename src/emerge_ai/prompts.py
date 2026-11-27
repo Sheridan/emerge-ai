@@ -19,6 +19,17 @@ PLAIN_TEXT_DIRECTIVE = (
 )
 
 
+def language_directive(language: str, structured: bool = False) -> str:
+    """The one language directive (spec: config-prompts, design D2). structured=True
+    is for calls whose reply is JSON: human-readable fields follow the target
+    language, JSON keys and action codes must not move."""
+    base = f"Always respond in {language} unless the user asks otherwise."
+    if structured:
+        base += (f" Human-readable fields are written in {language};"
+                 " JSON keys and action codes stay exactly as specified.")
+    return base
+
+
 def rules_candidates() -> list[Path]:
     env = os.environ.get(ENV_RULES_DIR)
     if env:
@@ -91,7 +102,7 @@ def assemble_system_prompt(rules: str, context: dict) -> str:
         f"profile: {context['profile']}\n"
         f"USE: {context['use_flags']}\n"
         f"emerge --info follows:\n{context['emerge_info']}\n\n"
-        f"Always respond in {context['language']} unless the user asks otherwise."
+        + language_directive(context["language"])
     )
 
 

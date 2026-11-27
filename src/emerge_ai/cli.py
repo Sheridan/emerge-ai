@@ -563,7 +563,7 @@ def _maybe_agent(
             agent = IncidentAgent(
                 client,
                 sandbox,
-                context=collect_context(info, cfg.language),
+                context=collect_context(info, cfg.resolved_language()),
                 journal_path=journal.JOURNAL_PATH,
             )
             proposal = agent.propose(
@@ -725,6 +725,7 @@ def _post_run_digest(run, output, config_path, runs_dir, verbose: bool = False) 
             text = changelog.collect_digest(
                 gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir,
                 client=client, packages=[e["cpv"] for e in run.plan],
+                language=cfg.resolved_language(),
             )
             if client is not None:
                 ui.paint_llm_block(text, cfg.llm_colors, sys.stderr)
@@ -742,7 +743,8 @@ def _changelog_mode(config_path, verbose=False) -> int:
         cfg = Config()
     client = LLMClient(cfg, verbose=verbose) if cfg.endpoint else None
     text = changelog.collect_digest(
-        gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir, client=client
+        gh_repos=cfg.gh_repos, git_urls=cfg.git_urls, news_dir=cfg.news_dir, client=client,
+        language=cfg.resolved_language()
     )
     if client is not None:
         ui.paint_llm_block(text, cfg.llm_colors, sys.stdout)
@@ -932,7 +934,8 @@ def main(
                 return _c.chat(messages)
 
         print(plan_digest(plan, stream=plan_stream, summarize=summarize,
-                          severity_slice=severity_slice), file=plan_stream)
+                          severity_slice=severity_slice,
+                          language=cfg.resolved_language()), file=plan_stream)
         if is_mass_update(emerge_args, plan):
             for line in doctor_report(plan, stream=sys.stderr):
                 print(line, file=sys.stderr)
@@ -1007,7 +1010,8 @@ def main(
                     """Free-text -> model channel: comment + order by keys; the
                     menu itself stays the whitelist's (design D8)."""
                     try:
-                        resp = _c.chat(consent_mod.build_analysis_messages(specs, text))
+                        resp = _c.chat(consent_mod.build_analysis_messages(
+                            specs, text, language=cfg.resolved_language()))
                         reply = ((resp.get("choices") or [{}])[0]
                                  .get("message") or {}).get("content") or ""
                     except LLMError as exc:

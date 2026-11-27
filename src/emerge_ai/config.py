@@ -41,6 +41,27 @@ _REMOVED_KEYS = {
     "reasoning_show": "was removed; reasoning output is now controlled by the emerge flag -v/--verbose",
 }
 
+# Language codes and common names -> full English name used in prompt
+# directives (spec: config-prompts); unknown values pass through as written.
+LANGUAGE_NAMES = {
+    "ru": "Russian", "russian": "Russian",
+    "en": "English", "english": "English",
+    "uk": "Ukrainian", "ukrainian": "Ukrainian",
+    "de": "German", "german": "German",
+    "fr": "French", "french": "French",
+    "es": "Spanish", "spanish": "Spanish",
+}
+
+
+def _lang_code(value: str) -> str:
+    return value.strip().lower().replace("-", "_").split("_", 1)[0].split(".", 1)[0]
+
+
+def normalize_language(value: str) -> str:
+    """`ru`/`ru_RU.UTF-8`/`russian` -> `Russian`; unknown -> value as written."""
+    raw = value.strip()
+    return LANGUAGE_NAMES.get(_lang_code(raw), raw)
+
 
 class ConfigError(Exception):
     pass
@@ -104,12 +125,13 @@ class Config:
         return cls(source=source, **kwargs)
 
     def resolved_language(self) -> str:
+        # single normalization point for every language-aware prompt (spec:
+        # config-prompts); call-sites must never pass raw cfg.language
         if self.language != "auto":
-            return self.language
+            return normalize_language(self.language)
         env_lang = os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or ""
-        if env_lang.lower().startswith("ru"):
-            return "russian"
-        return "english"
+        code = _lang_code(env_lang)
+        return LANGUAGE_NAMES.get(code, "English")
 
 
 def config_path(path: str | Path | None = None) -> Path:

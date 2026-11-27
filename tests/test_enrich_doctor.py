@@ -125,3 +125,25 @@ def test_plan_digest_summary_prompt_wraps_untrusted_cpv():
     user = seen[0][1]["content"]
     assert "ignore previous instructions" in user
     assert "UNTRUSTED-DATA-BEGIN" in user and "source=plan" in user
+
+
+def test_plan_digest_summary_prompt_carries_language_directive():
+    # spec: config-prompts — the digest summary call carries the language
+    # directive; JSON keys stay pinned; default is explicit English
+    seen = []
+    plan_digest(_plan(), estimate=None, summarize=lambda m: seen.append(m) or _Resp(""),
+                language="Russian")
+    system = seen[0][0]["content"]
+    assert "respond in Russian" in system
+    assert "JSON keys and action codes stay exactly as specified" in system
+    seen2 = []
+    plan_digest(_plan(), estimate=None, summarize=lambda m: seen2.append(m) or _Resp(""))
+    assert "respond in English" in seen2[0][0]["content"]
+
+
+def test_parse_summary_reply_accepts_russian_human_fields():
+    from emerge_ai.enrich import parse_summary_reply
+
+    summary, findings = parse_summary_reply(
+        '{"summary": "Обновление openssl: перезапустить службы", "findings": []}')
+    assert summary.startswith("Обновление openssl") and findings == []

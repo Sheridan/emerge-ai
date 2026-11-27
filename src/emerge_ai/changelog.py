@@ -9,7 +9,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from emerge_ai import injection
+from emerge_ai import injection, prompts
 from emerge_ai.prompts import PLAIN_TEXT_DIRECTIVE
 
 NEWS_DIR = "/var/lib/eselect-news/news"
@@ -95,7 +95,8 @@ CHANGE_SYSTEM = (
 )
 
 
-def llm_digest(client, items: list[dict], unavailable: list[str], packages: list[str] = ()) -> str:
+def llm_digest(client, items: list[dict], unavailable: list[str], packages: list[str] = (),
+               language: str = "English") -> str:
     corpus = "\n\n".join(
         injection.wrap_untrusted(f"{i['source']} :: {i['title']}\n{i['text']}", source=i["source"])
         for i in items
@@ -107,7 +108,8 @@ def llm_digest(client, items: list[dict], unavailable: list[str], packages: list
             "Merged in this run: " + ", ".join(packages), source="run-plan"
         )
     resp = client.chat(
-        [{"role": "system", "content": CHANGE_SYSTEM},
+        [{"role": "system", "content": CHANGE_SYSTEM + " "
+          + prompts.language_directive(language)},
          {"role": "user", "content": (corpus or "(no items)") + tail}]
     )
     return getattr(resp, "content", resp) or "empty reply"
@@ -123,6 +125,7 @@ def collect_digest(
     fetch_json=None,
     client=None,
     packages: list[str] = (),
+    language: str = "English",
 ) -> str:
     items, unavailable = [], []
     try:
@@ -154,4 +157,5 @@ def collect_digest(
         for u in unavailable:
             lines.append(f"- unavailable: {u}")
         return "emerge-ai changelog digest (raw):\n" + "\n".join(lines or ["- no changes found"])
-    return "emerge-ai changelog digest:\n" + llm_digest(client, items, unavailable, packages)
+    return "emerge-ai changelog digest:\n" + llm_digest(
+        client, items, unavailable, packages, language=language)

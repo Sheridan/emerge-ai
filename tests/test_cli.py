@@ -255,6 +255,36 @@ def test_maybe_agent_gated_on_verbose(monkeypatch, tmp_path):
     assert captured[-1] == {"verbose": True}
 
 
+def test_maybe_agent_system_prompt_carries_resolved_language(monkeypatch, tmp_path):
+    # spec: config-prompts — the raw cfg value ("ru") must reach the agent
+    # prompt as the normalized full name
+    from emerge_ai import state
+    from emerge_ai.flags import Mode
+    from emerge_ai.llm import Response
+
+    seen = []
+
+    class Recorder:
+        def __init__(self, cfg, **kw):
+            pass
+
+        def chat(self, messages, **kw):
+            seen.append(messages)
+            return Response("proposal: do nothing")
+
+    monkeypatch.setattr(cli, "LLMClient", Recorder)
+    monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "Portage 3.0.82")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"endpoint": "http://x/v1", "language": "ru"}')
+    cfg.chmod(0o600)
+    run = state.new_run(["-v"], Mode())
+    run.incident = {"class": "block"}
+    cli._maybe_agent(run, str(cfg))
+    assert seen, "agent must reach the endpoint (no swallowed error)"
+    system = seen[0][0]["content"]
+    assert "respond in Russian" in system  # cfg "ru" normalized, not raw
+
+
 # --- interactive operator question channel reaches the agent (spec: agent-loop-consent) ---
 
 

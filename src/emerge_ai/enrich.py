@@ -61,11 +61,13 @@ def format_duration(seconds: int) -> str:
     return " ".join(parts) or "0s"
 
 
-def build_plan_summary_messages(plan, core_text: str, severity_slice: str = "") -> list[dict]:
+def build_plan_summary_messages(plan, core_text: str, severity_slice: str = "",
+                                language: str = "English") -> list[dict]:
     """Prompt for the LLM plan summary. CPVs come from foreign ebuilds, so the
     core digest and the package list go through wrap_untrusted (spec: prompts).
     The capped severity slice (spec: plan-triage) rides the same call — no
-    second round-trip — wrapped the same way."""
+    second round-trip — wrapped the same way. The reply is JSON, so the
+    language directive pins keys (spec: config-prompts)."""
     entries = [{"cpv": e.cpv, "tier": e.tier} for e in plan.entries]
     user = (
         "DIGEST:\n" + injection.wrap_untrusted(core_text, source="digest")
@@ -74,7 +76,9 @@ def build_plan_summary_messages(plan, core_text: str, severity_slice: str = "") 
     if severity_slice:
         user += ("\n\n[severity-slice]\n"
                  + injection.wrap_untrusted(severity_slice, source="severity-slice"))
-    return [{"role": "system", "content": PLAN_SUMMARY_SYSTEM},
+    system = (PLAN_SUMMARY_SYSTEM + " "
+              + prompts.language_directive(language, structured=True))
+    return [{"role": "system", "content": system},
             {"role": "user", "content": user}]
 
 
@@ -91,7 +95,7 @@ def parse_summary_reply(reply: str) -> tuple[str, list[dict]]:
 
 
 def plan_digest(plan, estimate=genlop_estimate, stream=None, summarize=None,
-                severity_slice: str = "") -> str:
+                severity_slice: str = "", language: str = "English") -> str:
     """Short human digest shown after emerge's own pretend output. Tier lines get
     the fixed risk gradient when the stream is a color TTY (design D2).
 
@@ -126,7 +130,8 @@ def plan_digest(plan, estimate=genlop_estimate, stream=None, summarize=None,
         core = "\n".join(ANSI.sub("", line) for line in lines)
         summary, llm_findings = "", []
         try:
-            reply = summarize(build_plan_summary_messages(plan, core, severity_slice))
+            reply = summarize(build_plan_summary_messages(plan, core, severity_slice,
+                                                          language))
             reply = ANSI.sub("", str(getattr(reply, "content", reply) or "")).strip()
             summary, llm_findings = parse_summary_reply(reply)
         except Exception:  # design D3: no LLM (or a broken one) -> core only

@@ -93,3 +93,34 @@ def test_llm_digest_without_packages_prompt_unchanged():
     changelog.llm_digest(a, items, ["github:foo/bar (OSError)"])
     changelog.llm_digest(b, items, ["github:foo/bar (OSError)"], [])
     assert a.messages == b.messages
+
+
+def test_llm_digest_prompt_carries_language_directive():
+    # spec: config-prompts — the changelog call carries the directive; the
+    # reply is plain text, so nothing pins JSON keys here
+    class Fake:
+        def chat(self, messages, **kw):
+            self.messages = messages
+            return type("R", (), {"content": "-"})()
+
+    items = [{"source": "news:x", "title": "t", "text": "b"}]
+    f = Fake()
+    changelog.llm_digest(f, items, [], language="Russian")
+    assert "respond in Russian" in f.messages[0]["content"]
+    assert "JSON keys" not in f.messages[0]["content"]
+    f2 = Fake()
+    changelog.llm_digest(f2, items, [])  # default: explicit English
+    assert "respond in English" in f2.messages[0]["content"]
+
+
+def test_collect_digest_forwards_language_to_llm(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_llm(client, items, unavailable, packages=(), language="English"):
+        captured["language"] = language
+        return "-"
+
+    monkeypatch.setattr(changelog, "llm_digest", fake_llm)
+    changelog.collect_digest(news_dir=str(tmp_path / "missing"),
+                             client=object(), language="Russian")
+    assert captured["language"] == "Russian"

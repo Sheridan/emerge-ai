@@ -276,3 +276,20 @@ sudo emerge-ai -pv app-editors/vim 2>/tmp/verbose.log
 # 5) tool-call'и агента (сбойный атом, разбор): до каждого инструмента строка
 #    «emerge-ai: tool: <имя>(<аргументы>)», длинные аргументы срезаны плашкой
 ```
+
+## Язык ответов LLM (fix-llm-response-language, выполняет пользователь)
+
+```bash
+# 1) в конфиге {"language": "ru"} (или LANG=ru_RU.UTF-8 при language: auto):
+sudo emerge-ai -p app-editors/vim
+#   → LLM-сводка дайджеста плана по-русски; ключевые слова tier/findings — нет
+
+sudo emerge-ai --ask category/pkg   # инцидент: proposal агента по-русски
+
+# 2) структурные ответы не разъезжаются: при language: ru разбор etc-update и
+#    анализ consent-меню печатают human-поля (reason/comment) по-русски, а
+#    JSON-ключи/коды (keep-current/merge, ключи вариантов) работают как прежде
+
+# 3) "language": "en" — весь LLM-вывод на английском;
+#    "language": "xx" — директива использует значение как есть
+```

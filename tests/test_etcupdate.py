@@ -318,7 +318,8 @@ def test_etc_flow_language_reaches_llm(tmp_path, capsys):
               client_factory=lambda c, **kw: client)
     err = capsys.readouterr().err
     assert "LLM decision: keep-current — Keine Belege" in err
-    assert "respond in de" in client.messages[0]["content"]
+    # cfg value "de" normalizes to the full name before reaching the prompt
+    assert "respond in German" in client.messages[0]["content"]
 
 
 def test_etc_flow_web_access_off_never_fetches(tmp_path, capsys, monkeypatch):

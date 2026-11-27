@@ -18,7 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from emerge_ai import config_edit, gate, injection, llm, rollback, triage, ui
+from emerge_ai import config_edit, gate, injection, llm, prompts, rollback, triage, ui
 
 MENU_CAP = 6  # the ask_operator option cap, reused for the consent menu
 
@@ -191,15 +191,19 @@ CONSENT_ANALYSIS_SYSTEM = (
 )
 
 
-def build_analysis_messages(specs: list[MenuSpec], operator_text: str) -> list[dict]:
+def build_analysis_messages(specs: list[MenuSpec], operator_text: str,
+                            language: str = "English") -> list[dict]:
     """Variant keys/titles and the operator text go through wrap_untrusted
-    (spec: prompts): CPVs and typed text originate outside the trust boundary."""
+    (spec: prompts): CPVs and typed text originate outside the trust boundary.
+    The reply is JSON — the directive pins keys (spec: config-prompts)."""
     menu = injection.wrap_untrusted(
         json.dumps([{"key": s.key, "title": s.title, "kind": s.kind} for s in specs],
                    ensure_ascii=False),
         source="consent-menu")
     text = injection.wrap_untrusted(operator_text, source="operator")
-    return [{"role": "system", "content": CONSENT_ANALYSIS_SYSTEM},
+    system = (CONSENT_ANALYSIS_SYSTEM + " "
+              + prompts.language_directive(language, structured=True))
+    return [{"role": "system", "content": system},
             {"role": "user", "content": f"VARIANTS:\n{menu}\n\nOPERATOR:\n{text}"}]
 
 

@@ -154,10 +154,18 @@ def test_broken_json_raises(tmp_path):
 @pytest.mark.parametrize(
     ("language", "lang_env", "expected"),
     [
-        ("auto", "ru_RU.UTF-8", "russian"),
-        ("auto", "en_US.UTF-8", "english"),
-        ("auto", "", "english"),
-        ("deutsch", "ru_RU.UTF-8", "deutsch"),
+        ("auto", "ru_RU.UTF-8", "Russian"),
+        ("auto", "en_US.UTF-8", "English"),
+        ("auto", "", "English"),
+        ("auto", "C", "English"),
+        ("auto", "de_DE.UTF-8", "German"),
+        ("auto", "uk", "Ukrainian"),
+        ("deutsch", "ru_RU.UTF-8", "deutsch"),  # unknown — as written
+        ("ru", "", "Russian"),                  # short code normalizes
+        ("ru_RU.UTF-8", "", "Russian"),         # region/encoding sliced off
+        ("russian", "", "Russian"),             # full name stays a full name
+        ("en", "", "English"),
+        ("xx", "", "xx"),
     ],
 )
 def test_resolved_language(monkeypatch, language, lang_env, expected):
@@ -165,3 +173,10 @@ def test_resolved_language(monkeypatch, language, lang_env, expected):
     monkeypatch.delenv("LC_MESSAGES", raising=False)
     monkeypatch.setenv("LANG", lang_env)
     assert Config(language=language).resolved_language() == expected
+
+
+def test_resolved_language_lc_all_wins(monkeypatch):
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    monkeypatch.setenv("LC_ALL", "ru_RU.UTF-8")
+    assert Config(language="auto").resolved_language() == "Russian"
