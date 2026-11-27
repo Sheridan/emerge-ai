@@ -381,3 +381,75 @@ grep -o 'tool\[.*ask_operator — Ask the[^·]*' /tmp/ask.log | head -1  # хв�
 # 3) неинтерактив (--noninteractive, pipe): вопросов нет вообще, список
 #    инструментов без ask_operator — язык ни на что не влияет
 ```
+
+## Правка package.* на каталожной раскладке (fix-package-edit-directory-target, выполняет пользователь)
+
+Хост с `/etc/portage/package.accept_keywords/` как каталогом (штатная раскладка
+Gentoo) — на нём раньше был `IsADirectoryError` после согласия оператора.
+
+```bash
+# 0) раскладка видна (каталог, а не файл):
+ls -la /etc/portage/package.accept_keywords | head
+
+# 1) интерактивный прогон с гарантированно masked-находкой (в файле категории
+#    нужной строки нет):
+sudo emerge-ai app-container/edk2-bin
+#   → в consent-меню пункт «add '=app-container/edk2-bin-<v> ~amd64' to
+#     package.accept_keywords/app-container and re-plan» — путь с категорией,
+#     а не просто «package.accept_keywords», и та же цель в строке «undo: …»
+#   → выбор пункта: в stderr «emerge-ai: editing
+#     /etc/portage/package.accept_keywords/app-container: + =app-container/…»,
+#     затем «re-resolved after repair: plan is clean now» и мердж
+
+# 2) запись легла в файл категории, раскладка не переписана:
+test -d /etc/portage/package.accept_keywords            # каталог цел
+grep -n emerge-ai /etc/portage/package.accept_keywords/app-container  # строка с маркером
+ls -la /etc/portage/package.accept_keywords             # прочие файлы категорий целы
+
+# 3) отмена по аудит-маркеру видит строку внутри каталога (пустой файл остаётся):
+sudo python3 -c "
+from emerge_ai import config_edit
+print(config_edit.remove_by_run('<run-id>'))            # […/package.accept_keywords/app-container]
+print(config_edit.remove_by_run('<run-id>'))            # [] — идемпотентно
+"
+
+# 4) недостижимая цель — отказ с путём и причиной, не traceback:
+sudo mkdir -p /etc/portage/package.mask/app-misc        # «файл категории» — каталог
+sudo emerge-ai app-misc/<masked-pkg>                    # выбрать правку вида mask
+#   → «package-edit refused: cannot write /etc/portage/package.mask/app-misc: …»,
+#     меню показывается заново (q — выход без изменений системы),
+#     никакого IsADirectoryError в выводе
+sudo rmdir /etc/portage/package.mask/app-misc
+```
+
+## Правка лицензий идёт в package.license (fix-license-channel-filename, выполняет пользователь)
+
+Раньше вид `accept_license` писал в `package.accept_license` — файл, который
+portage не читает: запись выглядела починкой, мердж не менялся.
+
+```bash
+# 0) нечитаемого файла быть не должно (и до, и после):
+test ! -e /etc/portage/package.accept_license && echo ok
+
+# 1) хост с файловой раскладкой: прогон с находкой unaccepted license
+sudo emerge-ai <категория>/<пакет>     # пакет с непринимаемой лицензией
+#   → consent-пункт правки лицензий называет package.license
+#   → в stderr «emerge-ai: editing /etc/portage/package.license: + …»
+#   → после выбора: строка с аудит-маркером в package.license, перезапущенный
+#     emerge не сообщает о непринимаемой лицензии
+
+# 2) файл создан/дописан, лишнего нет:
+grep -n emerge-ai /etc/portage/package.license
+test ! -e /etc/portage/package.accept_license && echo ok
+ls -la /etc/portage | grep -c '^d.*package\.'   # раскладка не переписана
+
+# 3) каталожная раскладка (если /etc/portage/package.license — каталог):
+test -d /etc/portage/package.license && \
+  grep -n emerge-ai /etc/portage/package.license/<category>
+
+# 4) отмена по аудит-маркеру чистит только строку прогона:
+sudo python3 -c "
+from emerge_ai import config_edit
+print(config_edit.remove_by_run('<run-id>'))   # […/package.license]
+print(config_edit.remove_by_run('<run-id>'))   # [] — идемпотентно
+"

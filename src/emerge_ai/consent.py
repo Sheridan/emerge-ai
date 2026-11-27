@@ -79,15 +79,19 @@ def _as_findings(verdict) -> list:
     return [triage.Finding(**f) if isinstance(f, dict) else f for f in findings]
 
 
-def menu_specs(verdict, plan, *, world: list[str] | None = None) -> tuple[list[MenuSpec], list[str]]:
+def menu_specs(verdict, plan, *, world: list[str] | None = None,
+               etc_dir: str = "/etc/portage") -> tuple[list[MenuSpec], list[str]]:
     """Deterministic menu (design D2/D6): clean plan -> [merge]; degraded ->
     executable typed fixes (config_edit whitelist kinds, the etcupdate
     channel, the whitelisted commands) + [merge as-is] with the
     unresolved-finding count. `world` (atoms, read via portage_compat) is the
     first validation pass of task 1.2 — a deselect whose atom left world is
-    not shown at all. Non-executable advice never enters the list — it comes
-    back as manual lines to print outside it. Cap MENU_CAP; merge is never
-    cut, the least specific fixes fall off first."""
+    not shown at all. `etc_dir` is the same directory the apply channel writes
+    to, so a `package.*` line names the file it really lands in — a
+    category-layout host is told `package.accept_keywords/dev-libs` (spec:
+    repair-actions, design D7). Non-executable advice never enters the list —
+    it comes back as manual lines to print outside it. Cap MENU_CAP; merge is
+    never cut, the least specific fixes fall off first."""
     tiers = tuple(sorted({e.tier for e in plan.entries})) if plan is not None else ()
     n = len(plan.entries) if plan is not None else 0
     specs: list[MenuSpec] = []
@@ -121,12 +125,16 @@ def menu_specs(verdict, plan, *, world: list[str] | None = None) -> tuple[list[M
             elif cand["kind"] == "accept_keywords":
                 line = cand["text"]
                 cpv = line.split()[0].lstrip("=") if line.split() else "?"
+                # the destination is resolved now, from the same etc_dir the
+                # apply channel will write to: what the operator reads is where
+                # the line lands (spec: repair-actions)
+                dest = config_edit.destination_label("accept_keywords", line, etc_dir=etc_dir)
+                undo = config_edit.undo_text("accept_keywords", line=line, etc_dir=etc_dir)
                 specs.append(MenuSpec(
                     key=f"ak-{cpv}",
-                    title=f"add '{line}' to package.accept_keywords and re-plan",
+                    title=f"add '{line}' to {dest} and re-plan",
                     kind="fix",
-                    detail=[f"edit: package.accept_keywords: {line}",
-                            f"undo: {config_edit.undo_text('accept_keywords')}"],
+                    detail=[f"edit: {dest}: {line}", f"undo: {undo}"],
                     action={"type": "package-edit", "kind": "accept_keywords",
                             "lines": [line],
                             "reason": "emerge-ai consent repair (degraded plan)"},

@@ -334,7 +334,12 @@ def _finding_variants(findings: list, *, world: list[str] | None = None) -> list
     """Finding kind -> whitelist template (repair-actions D6): the slots are
     taken from the finding's evidence (CPV, keyword, path), and the
     membership pass filters deselects. Same keys/actions as consent.menu_specs
-    so the ask channel and the menu list identical executables."""
+    so the ask channel and the menu list identical executables.
+
+    The `package.<kind>` in these titles names the CHANNEL, not a file path: on
+    a category-layout host the line lands in a file inside that directory, and
+    the destination is resolved (and printed) by config_edit at write time —
+    this module never builds an etc_dir path (spec: repair-actions)."""
     from emerge_ai import triage as triage_mod
 
     rebuilt = [triage_mod.Finding(**f) if isinstance(f, dict) else f for f in findings]

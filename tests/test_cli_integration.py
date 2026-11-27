@@ -1374,6 +1374,62 @@ def test_apply_action_package_edit_idempotent(tmp_path, capsys):
     assert sum(1 for ln in lines if ln.split()[:1] == ["app-misc/foo"]) == 1
 
 
+def test_apply_action_skips_a_duplicate_in_the_license_file(tmp_path, capsys):
+    """Design D5: the skip line names the channel file — the license kind reads
+    `package.license`, so that is the file the operator is told about."""
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "package.license").write_text("app-misc/foo *NEEDED-licence\n")
+    run = state.RunState(run_id="r1", argv=[])
+    action = {"type": "package-edit", "kind": "accept_license",
+              "lines": ["app-misc/foo *NEEDED-licence"], "reason": "licence"}
+    assert cli._apply_action(action, run=run, etc_dir=str(etc))["status"] == "applied"
+    err = capsys.readouterr().err
+    assert "package.license: 'app-misc/foo *NEEDED-licence' already present — skipped" in err
+    assert not (etc / "package.accept_license").exists()
+    assert (etc / "package.license").read_text() == "app-misc/foo *NEEDED-licence\n"
+
+
+def test_apply_action_package_edit_refusal_names_the_destination(tmp_path, capsys):
+    """Design D4: an unwritable destination is a printed refusal naming the
+    file — never the `IsADirectoryError` traceback the append used to raise."""
+    etc = tmp_path / "etc"
+    (etc / "package.accept_keywords" / "app-container").mkdir(parents=True)
+    run = state.RunState(run_id="r1", argv=[])
+    res = cli._apply_action(
+        {"type": "package-edit", "kind": "accept_keywords",
+         "lines": ["=app-container/edk2-bin-2024 ~amd64"], "reason": "repair"},
+        run=run, etc_dir=str(etc))
+    assert res["status"] == "rejected" and res["retry_cycle"]
+    assert res["path"].endswith("package.accept_keywords/app-container")
+    err = capsys.readouterr().err
+    assert "package-edit refused" in err and "app-container" in err
+    # nothing was created, nothing of the user's tree was touched
+    assert [p.name for p in (etc / "package.accept_keywords").iterdir()] == ["app-container"]
+
+
+def test_incident_flow_counts_a_channel_refusal_as_a_repair_cycle(tmp_path, capsys):
+    """Design D5: a channel refusal does not heal itself between rounds, so it
+    counts against REPAIR_LIMIT — the failure loop cannot spin on it."""
+    etc = tmp_path / "etc"
+    (etc / "package.unmask" / "app-misc").mkdir(parents=True)  # the file is a directory
+    run = state.RunState(run_id="r1", argv=["app-misc/foo"])
+    run.incident = {"class": "mask", "argv": ["app-misc/foo"]}
+    plan = Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")])
+    applied = None
+    for _ in range(3):
+        applied = cli._incident_flow(run, Mode(responsibility=True), plan,
+                                     audit_path=str(tmp_path / "decisions.log"),
+                                     etc_dir=str(etc), interactive=False, world=[])
+    assert applied is None  # the third pass never started: the limit stopped it
+    assert [r["variant"] for r in run.repair] == ["package-unmask", "package-unmask"]
+    assert all(r.get("rejected") for r in run.repair)
+    err = capsys.readouterr().err
+    assert err.count("package-edit refused") == 2
+    assert "repair limit (2 apply->retry cycles) reached" in err
+    assert [p.name for p in (etc / "package.unmask").iterdir()] == ["app-misc"]
+
+
 def test_apply_action_unknown_type_fail_closed(tmp_path):
     run = state.RunState(run_id="r1", argv=[])
     with pytest.raises(ValueError, match="unknown repair action"):
@@ -1491,6 +1547,84 @@ sys.exit(0)
     saved = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert saved["state"] == "DONE"
     assert saved["consent_repairs"][0]["variant"] == "ak-app-container/edk2-bin-2024"
+
+
+def _fixfile_stub(tmp_path, monkeypatch, err_text):
+    """Stub emerge that turns clean once EMERGE_STUB_FIXFILE exists (the file
+    the channel writes), logging every argv."""
+    stub = tmp_path / "emerge"
+    stub.write_text("""#!/usr/bin/env python3
+import os, sys
+log = os.environ.get("EMERGE_STUB_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(" ".join(sys.argv[1:]) + "\\n")
+print("[ebuild  N    ] app-misc/foo-1.0")
+print("Total: 1 packages")
+if not os.path.exists(os.environ.get("EMERGE_STUB_FIXFILE", "")):
+    print(os.environ["EMERGE_STUB_ERR"], file=sys.stderr)
+sys.exit(0)
+""")
+    stub.chmod(stub.stat().st_mode | 0o755)
+    monkeypatch.setenv("EMERGE_STUB_LOG", str(tmp_path / "calls.log"))
+    monkeypatch.setenv("EMERGE_STUB_ERR", err_text)
+    return stub
+
+
+def test_consent_repair_writes_the_category_file(ok_compat, monkeypatch, tmp_path, capsys):
+    """End-to-end on the category layout (spec: repair-actions): the consented
+    line lands in package.accept_keywords/<category>, the re-resolve is clean,
+    the merge runs — and the dialog named that file before writing it."""
+    etc = tmp_path / "etc"
+    ak = etc / "package.accept_keywords"
+    ak.mkdir(parents=True)
+    (ak / "sys-apps").write_text("sys-apps/user ** # theirs\n")
+    monkeypatch.setenv("EMERGE_STUB_FIXFILE", str(ak / "app-container"))
+    stub = _fixfile_stub(tmp_path, monkeypatch, MASKED_STUB_ERR)
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    answers = iter(["1", "y"])
+    rc = cli.main(["app-misc/foo"], emerge_binary=str(stub), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=lambda prompt="": next(answers), etc_dir=str(etc))
+    assert rc == 0
+    assert ak.is_dir()  # the directory was never replaced by a file
+    written = (ak / "app-container").read_text()
+    assert written.startswith("=app-container/edk2-bin-2024 ~amd64 # emerge-ai: ")
+    assert len(written.splitlines()) == 1
+    assert (ak / "sys-apps").read_text() == "sys-apps/user ** # theirs\n"  # neighbour intact
+    err = capsys.readouterr().err
+    assert "edit: package.accept_keywords/app-container: =app-container/edk2-bin-2024 ~amd64" in err
+    assert f"editing {ak}/app-container: + =app-container/edk2-bin-2024 ~amd64" in err
+    assert "re-resolved after repair: plan is clean now" in err
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["consent_repairs"][0]["variant"] == "ak-app-container/edk2-bin-2024"
+
+
+def test_consent_shows_the_menu_again_after_a_refused_write(ok_compat, monkeypatch,
+                                                            tmp_path, capsys):
+    """Design D5: a channel refusal is not an exit — the menu comes back with
+    the reason already printed, and `q` leaves the system untouched."""
+    etc = tmp_path / "etc"
+    ak = etc / "package.accept_keywords"
+    (ak / "app-container").mkdir(parents=True)  # the destination is a directory
+    monkeypatch.setenv("EMERGE_STUB_FIXFILE", str(etc / "never-appears"))
+    stub = _fixfile_stub(tmp_path, monkeypatch, MASKED_STUB_ERR)
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+    answers = iter(["1", "q"])  # the fix, it is refused, then the way out
+    rc = cli.main(["app-misc/foo"], emerge_binary=str(stub), runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=lambda prompt="": next(answers), etc_dir=str(etc))
+    assert rc == 130  # aborted, nothing merged
+    err = capsys.readouterr().err
+    # the menu is rendered once per round: the refused one, then the same menu again
+    assert err.count("[q] quit (no changes)") == 2
+    assert "package-edit refused" in err
+    assert "operator aborted; nothing changed" in err
+    assert [p.name for p in ak.iterdir()] == ["app-container"]  # nothing written
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["consent_repairs"] == []  # a refusal is not a fix
 
 
 def test_ask_interactive_consent_y_is_the_legacy_yes(emerge_stub, ok_compat,

@@ -105,6 +105,27 @@ def test_menu_four_findings_four_executable_variants():
                    for line in s.detail) for s in fixes)  # every item says undo
 
 
+def test_menu_names_the_category_file_on_a_directory_layout_host(tmp_path):
+    """spec: repair-actions (design D7) — the wording is the destination: on a
+    category-layout host the operator is shown the file the line goes into."""
+    (tmp_path / "package.accept_keywords").mkdir()
+    specs, _ = consent.menu_specs(_verdict(), PLAN_REST, etc_dir=str(tmp_path))
+    ak = next(s for s in specs if s.key.startswith("ak-"))
+    assert ("edit: package.accept_keywords/app-container: "
+            "=app-container/edk2-bin-2024 ~amd64") in ak.detail
+    assert ("undo: remove the run's lines (audit marker '# emerge-ai:') from "
+            "package.accept_keywords/app-container") in ak.detail
+    assert ak.title.endswith("to package.accept_keywords/app-container and re-plan")
+
+
+def test_menu_wording_on_a_file_layout_host_is_the_plain_file(tmp_path):
+    (tmp_path / "package.accept_keywords").write_text("# keep\n")
+    specs, _ = consent.menu_specs(_verdict(), PLAN_REST, etc_dir=str(tmp_path))
+    ak = next(s for s in specs if s.key.startswith("ak-"))
+    assert ("edit: package.accept_keywords: =app-container/edk2-bin-2024 ~amd64") in ak.detail
+    assert not any("/app-container" in line for line in ak.detail)
+
+
 def test_menu_deselect_requires_world_membership():
     """Task 1.2: a deselect only enters the menu when its atom is a @world
     member; otherwise it is manual advice — never a stale executable."""

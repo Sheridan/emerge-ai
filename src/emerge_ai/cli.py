@@ -352,25 +352,43 @@ def _apply_action(action: dict, *, run, etc_dir: str = "/etc/portage", overlay_r
             raise ValueError("etc-update action without an etc channel in this context")
         return etc_apply(action["path"])
     if t == "package-edit":
-        # idempotent: existing (commented) line with the same directive is skipped
-        for line in action["lines"]:
-            want = line.split()
-            etc = Path(etc_dir)
-            if etc.is_dir():
-                dup = any(
-                    ln.strip() and not ln.lstrip().startswith("#") and
-                    ln.split()[: len(want)] == want
-                    for f in etc.rglob("*") if f.is_file()
-                    for ln in f.read_text(errors="ignore").splitlines()
-                )
-                if dup:
-                    print(ui.info(f"package.{action['kind']}: '{line}' already present — skipped"),
-                          file=sys.stderr)
-                    continue
-            config_edit.apply_package_edit(
-                action["kind"], line, reason=action["reason"],
-                journal_id=run.run_id, etc_dir=etc_dir,
-            )
+        # idempotent: existing (commented) line with the same directive is skipped.
+        # The scan deliberately reads the WHOLE etc tree (not config_edit's
+        # package.* walk): a directive already present anywhere in /etc/portage
+        # — any kind, any layout — must not be duplicated (spec: repair-actions).
+        written: list[Path] = []
+        try:
+            for line in action["lines"]:
+                want = line.split()
+                etc = Path(etc_dir)
+                if etc.is_dir():
+                    dup = any(
+                        ln.strip() and not ln.lstrip().startswith("#") and
+                        ln.split()[: len(want)] == want
+                        for f in etc.rglob("*") if f.is_file()
+                        for ln in f.read_text(errors="ignore").splitlines()
+                    )
+                    if dup:
+                        print(ui.info(f"{config_edit.channel_file(action['kind'])}: "
+                                      f"'{line}' already present — skipped"),
+                              file=sys.stderr)
+                        continue
+                written.append(config_edit.apply_package_edit(
+                    action["kind"], line, reason=action["reason"],
+                    journal_id=run.run_id, etc_dir=etc_dir,
+                ))
+        except (config_edit.ChannelError, OSError) as exc:
+            # the channel cannot write its destination (design D4): the refusal
+            # names the file and the reason, and never leaves a traceback where
+            # the operator just gave consent. Lines already written stay — they
+            # carry this run's audit marker, so they undo with the run.
+            already = f"; written before the failure: {', '.join(map(str, written))}" if written else ""
+            print(ui.err(f"package-edit refused: {exc}{already}"), file=sys.stderr)
+            path = getattr(exc, "path", str(etc_dir))
+            reason = getattr(exc, "reason", str(exc))
+            # retry_cycle: unlike a stale slot (D2), a channel refusal does not
+            # heal itself between rounds, so the repair cycle is counted (D5)
+            return {"status": "rejected", "reason": reason, "path": path, "retry_cycle": True}
         return {"status": "applied"}
     if t == "overlay-copy":
         cpv = action["cpv"]
@@ -425,7 +443,16 @@ def _incident_flow(
                                 overlay_root=overlay_root, emerge_binary=emerge_binary)
             if res.get("status") == "rejected":
                 # TOCTOU (D2): the slot validator refused at apply time — the
-                # warning was printed, nothing mutated, no cycle counted
+                # warning was printed, nothing mutated, no cycle counted. A
+                # package-edit channel refusal (D4) is different: it does not
+                # heal itself between rounds, so the cycle counts against
+                # REPAIR_LIMIT (D5) and the retry loop cannot spin on it
+                if res.get("retry_cycle"):
+                    run.repair.append({"attempt": len(run.repair) + 1,
+                                       "variant": spec["key"], "rejected": True})
+                    print(ui.warn(f"repair [{spec['key']}] refused: "
+                                  f"{res.get('reason')} ({res.get('path')})"),
+                          file=sys.stderr)
                 return
             run.repair.append({"attempt": len(run.repair) + 1, "variant": spec["key"]})
             print(ui.ok(f"applied repair variant [{spec['key']}], retrying emerge"), file=sys.stderr)
@@ -604,7 +631,9 @@ def _pkg_docs(sandbox, path: str) -> list[tuple[str, str]]:
 
     A <cat>/<pn> pair under package.use*/package.accept_keywords/package.mask/
     package.unmask resolves to its packages.gentoo.org page; anything else
-    falls back to a wiki search on the file's basename. Every failure mode
+    falls back to a wiki search on the file's basename. The regex reads paths
+    etc-update reports — it is not the package-edit channel, whose destination
+    is resolved only by config_edit (spec: repair-actions). Every failure mode
     (fetch error, empty page) yields [] with a warning — never an exception,
     so an unreachable network cannot skip the LLM decision (design D3).
     """
@@ -1034,7 +1063,14 @@ def main(
             .apply_variant): the whitelist interpreter stays the only writer."""
             act = dict(spec.action or {})
             if act.get("type") == "package-edit":
-                _apply_action(act, run=run, etc_dir=etc_dir)
+                res = _apply_action(act, run=run, etc_dir=etc_dir)
+                if res.get("status") == "rejected":
+                    # the channel refused its destination (design D4): reason
+                    # printed, nothing mutated — not a fix, so not counted as
+                    # one and the menu just comes back with it
+                    return
+                run.consent_repairs.append({"variant": spec.key, "action": act})
+                return
             elif act.get("type") == "command":
                 res = _apply_action(act, run=run, emerge_binary=emerge_binary)
                 if res.get("status") != "executed":
@@ -1084,7 +1120,8 @@ def main(
             return None
 
         while True:
-            specs, manual = consent_mod.menu_specs(run.triage, plan, world=world_atoms)
+            specs, manual = consent_mod.menu_specs(run.triage, plan, world=world_atoms,
+                                                   etc_dir=etc_dir)
             decision = consent_mod.run_dialog(
                 specs,
                 contract_block=consent_mod.protect_contract(

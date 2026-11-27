@@ -103,9 +103,10 @@ def test_apply_user_patch_same_name_overwrites(tmp_path):
 # --- per-run undo (spec: repair-actions, design D3) ---------------------------
 
 def test_undo_text_exists_for_every_edit_kind():
-    for kind in ("use", "accept_keywords", "accept_license", "mask", "unmask", "env"):
+    for kind in config_edit.KINDS:
         text = config_edit.undo_text(kind)
-        assert text.startswith("remove the run's lines") and f"package.{kind}" in text
+        assert text.startswith("remove the run's lines")
+        assert config_edit.channel_file(kind) in text  # the file portage reads
 
 
 def test_remove_by_run_deletes_only_that_run(tmp_path):
@@ -138,3 +139,258 @@ def test_writes_are_announced(tmp_path, capsys):
     path = config_edit.apply_user_patch("dev-libs", "foo", "--- a\n+++ b\n",
                                         reason="patch", patches_dir=tmp_path, now=D)
     assert f"emerge-ai: writing patch {path}" in capsys.readouterr().err
+
+
+# --- directory layout (spec: repair-actions, design D1/D3) -------------------
+
+AK = "=dev-libs/jemalloc-5.4.0-r2 ~amd64"
+
+
+@pytest.mark.parametrize("line,want", [
+    (AK, "dev-libs"),
+    ("app-misc/foo nls", "app-misc"),
+    (">=x11-libs/cairo-1.18[kde] X", "x11-libs"),
+])
+def test_category_of_reuses_the_atom_normalizer(line, want):
+    assert config_edit.category_of(line) == want
+
+
+@pytest.mark.parametrize("line", ["*/* cuda", "@world", "", "static-libs"])
+def test_category_of_nothing_to_file_under(line):
+    assert config_edit.category_of(line) is None
+
+
+def test_resolve_target_follows_the_hosts_layout(tmp_path):
+    (tmp_path / "package.accept_keywords").mkdir()  # Gentoo per-category layout
+    (tmp_path / "package.use").write_text("a/b x\n")  # a host that keeps files
+    assert config_edit.resolve_package_target(
+        "accept_keywords", AK, etc_dir=tmp_path) == (
+        tmp_path / "package.accept_keywords" / "dev-libs")
+    assert config_edit.resolve_package_target("use", "c/d y", etc_dir=tmp_path) == (
+        tmp_path / "package.use")
+    # a missing target stays a file: the layout is never imposed
+    assert config_edit.resolve_package_target("mask", "app-misc/z", etc_dir=tmp_path) == (
+        tmp_path / "package.mask")
+    assert config_edit.destination_label("accept_keywords", AK, etc_dir=tmp_path) == (
+        "package.accept_keywords/dev-libs")
+
+
+def test_apply_package_edit_into_category_directory(tmp_path):
+    ak = tmp_path / "package.accept_keywords"
+    ak.mkdir()
+    (ak / "app-misc").write_text("app-misc/user ** # theirs\n")
+    target = config_edit.apply_package_edit(
+        "accept_keywords", AK, reason="masked dep", journal_id="j1", etc_dir=tmp_path, now=D)
+    assert target == ak / "dev-libs"
+    assert target.read_text() == (
+        "=dev-libs/jemalloc-5.4.0-r2 ~amd64 # emerge-ai: 2026-11-24 j1 masked dep\n")
+    assert (ak / "app-misc").read_text() == "app-misc/user ** # theirs\n"  # untouched
+    assert ak.is_dir()  # the directory was never replaced by a file
+
+
+def test_apply_package_edit_reserve_file_without_category(tmp_path):
+    (tmp_path / "package.mask").mkdir()
+    target = config_edit.apply_package_edit(
+        "mask", "*/* cuda", reason="r", journal_id="j", etc_dir=tmp_path, now=D)
+    assert target == tmp_path / "package.mask" / config_edit.RESERVE_FILE
+    config_edit.apply_package_edit("mask", "@world cuda", reason="r2", journal_id="j",
+                                   etc_dir=tmp_path, now=D)
+    assert len(target.read_text().splitlines()) == 2  # append, never rewrite
+
+
+def test_directory_write_is_announced_with_its_path(tmp_path, capsys):
+    # spec: repair-actions — the shown path is the written path
+    (tmp_path / "package.accept_keywords").mkdir()
+    config_edit.apply_package_edit("accept_keywords", AK, reason="masked dep",
+                                   journal_id="j1", etc_dir=tmp_path, now=D)
+    assert (f"emerge-ai: editing {tmp_path}/package.accept_keywords/dev-libs: + {AK}"
+            in capsys.readouterr().err)
+
+
+def test_apply_package_edit_refuses_a_non_file_destination(tmp_path):
+    (tmp_path / "package.mask" / "dev-libs").mkdir(parents=True)
+    (tmp_path / "package.mask" / "user").write_text("app-misc/keep me\n")
+    before = sorted(p.name for p in (tmp_path / "package.mask").iterdir())
+    with pytest.raises(config_edit.ChannelError) as excinfo:
+        config_edit.apply_package_edit("mask", "dev-libs/foo", reason="r",
+                                       etc_dir=tmp_path, now=D)
+    assert str(tmp_path / "package.mask" / "dev-libs") in str(excinfo.value)
+    assert not isinstance(excinfo.value, IsADirectoryError)
+    assert sorted(p.name for p in (tmp_path / "package.mask").iterdir()) == before
+    assert (tmp_path / "package.mask" / "user").read_text() == "app-misc/keep me\n"
+
+
+def test_apply_package_edit_unwritable_destination_is_a_channel_error(tmp_path):
+    ak = tmp_path / "package.accept_keywords"
+    ak.mkdir()
+    ak.chmod(0o500)  # read-only directory: append is impossible
+    try:
+        with pytest.raises(config_edit.ChannelError) as excinfo:
+            config_edit.apply_package_edit("accept_keywords", AK, reason="r",
+                                           etc_dir=tmp_path, now=D)
+        assert "dev-libs" in str(excinfo.value)
+    finally:
+        ak.chmod(0o700)
+
+
+# --- undo/overview reach into the directories (spec: repair-actions, D6) -----
+
+def test_remove_by_run_reaches_into_category_directories(tmp_path):
+    dev = tmp_path / "package.accept_keywords" / "dev-libs"
+    dev.parent.mkdir()
+    dev.write_text(
+        "dev-libs/user ** keep me\n"
+        "=dev-libs/jemalloc-5.4.0-r2 ~amd64 # emerge-ai: 2026-11-24 run77 masked dep\n")
+    assert config_edit.remove_by_run("run99", etc_dir=tmp_path) == []  # another run
+    touched = config_edit.remove_by_run("run77", etc_dir=tmp_path)
+    assert touched == [dev]
+    assert dev.read_text() == "dev-libs/user ** keep me\n"
+    assert dev.exists()  # emptied files are never removed
+    assert config_edit.remove_by_run("run77", etc_dir=tmp_path) == []  # idempotent
+
+
+def test_remove_by_run_empties_a_whole_nested_file(tmp_path):
+    deep = tmp_path / "package.use" / "dev-libs" / "foo"
+    deep.parent.mkdir(parents=True)
+    deep.write_text("dev-libs/foo x # emerge-ai: 2026-11-24 run5 r\n")
+    assert config_edit.remove_by_run("run5", etc_dir=tmp_path) == [deep]
+    assert deep.exists() and not deep.read_text().strip()
+
+
+def test_get_package_edit_lines_reads_a_directory_target(tmp_path):
+    use = tmp_path / "package.use"
+    (use / "dev-libs").mkdir(parents=True)
+    (use / "app-misc").write_text("app-misc/a x\n")
+    (use / "dev-libs" / "foo").write_text(
+        "dev-libs/foo y # emerge-ai: 2026-11-24 j1 inline\n")
+    (use / "notes").write_text("# emerge-ai: 2026-01-01 j0 header\n")
+    lines = config_edit.get_package_edit_lines("use", etc_dir=tmp_path)
+    assert ("app-misc/a x", False) in lines
+    assert ("dev-libs/foo y # emerge-ai: 2026-11-24 j1 inline", True) in lines
+    assert ("# emerge-ai: 2026-01-01 j0 header", True) in lines
+    assert config_edit.get_package_edit_lines("mask", etc_dir=tmp_path) == []
+
+
+def test_package_files_stays_inside_the_package_prefix(tmp_path):
+    use = tmp_path / "package.use"
+    (use / "dev-libs").mkdir(parents=True)
+    (use / "dev-libs" / "foo").write_text("dev-libs/foo x\n")
+    (use / "app-misc").write_text("app-misc/bar y\n")
+    (tmp_path / "package.env").mkdir()
+    (tmp_path / "package.env" / "lto").write_text("LD=lld\n")
+    (tmp_path / "repos.conf").mkdir()
+    (tmp_path / "repos.conf" / "gentoo.conf").write_text("[DEFAULT]\n")
+    (tmp_path / "package.license").write_text("*FAcE-RARE\n")
+    got = {p.relative_to(tmp_path).as_posix()
+           for p in config_edit.package_files(etc_dir=tmp_path)}
+    assert got == {"package.env/lto", "package.license", "package.use/app-misc",
+                   "package.use/dev-libs/foo"}
+
+
+# --- wording names the real file (design D7) --------------------------------
+
+def test_undo_text_names_the_category_file(tmp_path):
+    (tmp_path / "package.accept_keywords").mkdir()
+    assert config_edit.undo_text("accept_keywords", line=AK, etc_dir=tmp_path) == (
+        "remove the run's lines (audit marker '# emerge-ai:') from "
+        "package.accept_keywords/dev-libs")
+    # a file-layout host (and a call without a line) keeps the per-kind wording
+    assert config_edit.undo_text("accept_keywords", line=AK, etc_dir=tmp_path / "empty") == (
+        config_edit.undo_text("accept_keywords"))
+
+
+# --- the channel file is the name portage reads (spec: repair-actions) ------
+
+# Literal, deliberately not derived from the code: `package.accept_license` is a
+# file portage never opens (LicenseManager knows only "package.license"), so a
+# kind named after the variable is NOT a valid channel file. Editing the table
+# without editing this list fails here.
+PORTAGE_CHANNEL_FILES = {
+    "use": "package.use",
+    "accept_keywords": "package.accept_keywords",
+    "accept_license": "package.license",
+    "mask": "package.mask",
+    "unmask": "package.unmask",
+    "env": "package.env",
+}
+
+
+def test_every_kind_names_a_file_portage_reads():
+    assert {k: config_edit.channel_file(k) for k in config_edit.KINDS} == PORTAGE_CHANNEL_FILES
+
+
+def test_license_edit_writes_the_readable_file(tmp_path, capsys):
+    """The license kind used to write package.accept_license, which no version
+    of portage reads: the write looked like a fix and changed nothing."""
+    line = "www-servers/nginx *NEEDED-licence"
+    got = config_edit.apply_package_edit("accept_license", line, reason="licence",
+                                         journal_id="j1", etc_dir=tmp_path, now=D)
+    assert got == tmp_path / "package.license"
+    assert got.read_text() == f"{line} # emerge-ai: 2026-11-24 j1 licence\n"
+    assert not (tmp_path / "package.accept_license").exists()
+    assert (f"emerge-ai: editing {tmp_path}/package.license: + {line}"
+            in capsys.readouterr().err)
+
+
+def test_license_channel_honours_the_directory_layout(tmp_path):
+    lic = tmp_path / "package.license"
+    lic.mkdir()
+    (lic / "app-misc").write_text("app-misc/user *FOO\n")
+    assert config_edit.resolve_package_target("accept_license", "dev-libs/foo *NEEDED",
+                                              etc_dir=tmp_path) == lic / "dev-libs"
+    assert config_edit.destination_label("accept_license", "app-misc/foo *NEEDED",
+                                         etc_dir=tmp_path) == "package.license/app-misc"
+    got = config_edit.apply_package_edit("accept_license", "app-misc/foo *NEEDED",
+                                         reason="licence", journal_id="j1",
+                                         etc_dir=tmp_path, now=D)
+    assert got == lic / "app-misc"  # the layout rule applies to this name as well
+    assert (lic / "app-misc").read_text() == (
+        "app-misc/user *FOO\n"
+        "app-misc/foo *NEEDED # emerge-ai: 2026-11-24 j1 licence\n")
+    assert lic.is_dir()  # the directory was never replaced by a file
+    assert not (tmp_path / "package.accept_license").exists()
+
+
+def test_license_lines_are_reviewed_and_undone_under_that_name(tmp_path):
+    lic = tmp_path / "package.license"
+    (lic / "dev-libs").parent.mkdir(parents=True)
+    (lic / "dev-libs").write_text("dev-libs/user *FOO\n")
+    config_edit.apply_package_edit("accept_license", "dev-libs/foo *NEEDED",
+                                   reason="licence", journal_id="run7", etc_dir=tmp_path, now=D)
+    got = config_edit.get_package_edit_lines("accept_license", etc_dir=tmp_path)
+    assert ("dev-libs/user *FOO", False) in got
+    assert ("dev-libs/foo *NEEDED # emerge-ai: 2026-11-24 run7 licence", True) in got
+    assert config_edit.get_package_edit_lines("use", etc_dir=tmp_path) == []
+    touched = config_edit.remove_by_run("run7", etc_dir=tmp_path)
+    assert touched == [lic / "dev-libs"]
+    assert (lic / "dev-libs").read_text() == "dev-libs/user *FOO\n"
+    assert config_edit.remove_by_run("run7", etc_dir=tmp_path) == []  # idempotent
+
+
+def test_undo_wording_names_the_license_file(tmp_path):
+    assert config_edit.undo_text("accept_license").endswith("package.license")
+    (tmp_path / "package.license").mkdir()
+    assert config_edit.undo_text(
+        "accept_license", line="app-misc/foo *NEEDED",
+        etc_dir=tmp_path).endswith("package.license/app-misc")
+
+
+def test_license_lines_without_a_category_use_the_reserve(tmp_path):
+    lic = tmp_path / "package.license"
+    lic.mkdir()
+    got = config_edit.apply_package_edit("accept_license", "*/* *NEEDED-licence",
+                                         reason="licence", journal_id="j1",
+                                         etc_dir=tmp_path, now=D)
+    assert got == lic / config_edit.RESERVE_FILE
+    assert not (tmp_path / "package.accept_license").exists()
+
+
+def test_license_channel_refuses_a_directory_at_the_category_name(tmp_path):
+    lic = tmp_path / "package.license"
+    (lic / "app-misc").mkdir(parents=True)
+    with pytest.raises(config_edit.ChannelError) as exc:
+        config_edit.apply_package_edit("accept_license", "app-misc/foo *NEEDED",
+                                       reason="licence", journal_id="j1",
+                                       etc_dir=tmp_path, now=D)
+    assert exc.value.path == str(lic / "app-misc")  # the refusal names that file
+    assert not (tmp_path / "package.accept_license").exists()
