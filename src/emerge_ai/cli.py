@@ -985,7 +985,7 @@ def main(
         # any question, protection or merge (spec: plan-triage); `world` keeps
         # report and consent menu in agreement about what is executable
         for line in triage.render_report(verdict, artifact_path, for_pretend=pretend,
-                                         world=world_atoms):
+                                         world=world_atoms, stream=plan_stream):
             print(line, file=plan_stream)
 
     if cfg is not None:
@@ -1133,6 +1133,7 @@ def main(
                 input_fn=input_fn,
                 analyze=consent_analyze,
                 execute=_consent_execute,
+                stream=plan_stream,
             )
             status = decision["status"]
             if status == "applied":

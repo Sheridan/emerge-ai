@@ -7,10 +7,13 @@ audited before execution.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from emerge_ai import ui
 
 AUDIT_PATH = "/var/log/emerge-ai/decisions.log"
 
@@ -31,17 +34,25 @@ class Variant:
     tiers: tuple[int, ...] = (5,)
 
 
-def render(variants: list[Variant]) -> str:
-    lines = []
+def render(variants: list[Variant], *, stream=None) -> str:
+    """The numbered variant menu as a highlighted decision block
+    (spec: console-output): blank line, bold-yellow banner, green [N],
+    yellow body, closing blank line. `stream` only decides coloring —
+    callers echo the returned string to that same stream (design D3);
+    pipes, NO_COLOR and TERM=dumb get the exact same text without codes."""
+    stream = sys.stdout if stream is None else stream
+    lines = ["", ui.decision_banner_line(stream)]
     for i, v in enumerate(variants, 1):
-        lines.append(f"[{i}] {v.title}  ({v.kind})")
+        lines.append(ui.decision_choice(stream, f"[{i}]", f" {v.title}  ({v.kind})"))
         for p in v.pros:
-            lines.append(f"      + {p}")
+            lines.append(ui.decision_text(stream, f"      + {p}"))
         for c in v.cons:
-            lines.append(f"      - {c}")
+            lines.append(ui.decision_text(stream, f"      - {c}"))
         for r in v.risks:
-            lines.append(f"      ! risk: {r}")
-    lines.append("[c] propose your own text   [q] quit (no changes)")
+            lines.append(ui.decision_text(stream, f"      ! risk: {r}"))
+    lines.append(ui.decision_text(
+        stream, "[c] propose your own text   [q] quit (no changes)"))
+    lines.append("")
     return "\n".join(lines)
 
 

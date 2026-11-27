@@ -106,6 +106,24 @@ def test_plan_digest_llm_summary_appends_after_core():
     assert '"summary"' in calls[0][0]["content"]
 
 
+def test_plan_digest_llm_finding_kind_tokens_painted():
+    reply = ('{"summary": "s", "findings": ['
+             '{"kind": "masked", "cpv": "a/b-1", "evidence": "masked by x"},'
+             '{"kind": "other", "cpv": "c/d-2", "evidence": "note"}]}')
+
+    def summarize(messages):
+        return _Resp(reply)
+
+    digest = plan_digest(_plan(), estimate=None, summarize=summarize, stream=TTY())
+    assert "\x1b[33mmasked\x1b[0m" in digest  # scale color on the token only
+    assert "\x1b[36m a/b-1: masked by x\x1b[0m" in digest  # rest keeps content color
+    assert "- other\x1b[36m" in digest  # unscaled kind: token plain, rest painted
+    plain = plan_digest(_plan(), estimate=None, summarize=summarize,
+                        stream=io.StringIO())
+    assert "  - masked a/b-1: masked by x" in plain
+    assert "  - other c/d-2: note" in plain and "\x1b" not in plain
+
+
 def test_plan_digest_llm_failure_degrades_to_core():
     def boom(messages):
         raise RuntimeError("llm down")

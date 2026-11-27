@@ -1641,6 +1641,8 @@ def test_ask_interactive_consent_y_is_the_legacy_yes(emerge_stub, ok_compat,
     out = capsys.readouterr().out  # -a keeps run material on stdout
     assert "recovery point contract" in out
     assert "merge the queue as shown" in out
+    # decision block separation survives in the pipe without any color codes
+    assert "── decisions" in out and "\x1b" not in out
 
 
 def test_ask_interactive_consent_n_keeps_zero_code(emerge_stub, ok_compat,

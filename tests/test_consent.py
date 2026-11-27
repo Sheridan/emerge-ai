@@ -1,9 +1,10 @@
 """Consent dialog core (spec: consent-dialogue, tasks 4.1): contract render,
 deterministic menu, gate-core execution, model channel, aborts."""
 
+import io
 import json
 
-from emerge_ai import consent, triage
+from emerge_ai import consent, triage, ui
 from emerge_ai.plan import Plan, PlanEntry
 
 MASKED = ("!!! app-container/edk2-bin-2024:0 is masked by: "
@@ -289,3 +290,41 @@ def test_parse_analysis_accepts_russian_comment_with_intact_keys():
         '{"comment": "Мировой файл будет восстановлен из бэкапа", "order": ["merge"]}')
     assert comment == "Мировой файл будет восстановлен из бэкапа"
     assert order == ["merge"]
+
+
+# --- menu highlighting (spec: console-output, decision highlight) ------------
+
+
+class TTY(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_menu_painted_on_color_stream():
+    specs, _ = consent.menu_specs(None, PLAN_T1)
+    tty = TTY()
+    text = consent.render_question(["contract"], specs, [], stream=tty)
+    assert "\x1b[33mcontract\x1b[0m" not in text  # contract lines are not block body
+    assert f"\x1b[1;33m{ui.DECISION_BANNER}\x1b[0m" in text
+    assert "\x1b[32m[1]\x1b[0m" in text
+    assert "\x1b[33m[c] propose your own text" in text
+
+
+def test_menu_plain_when_stream_is_pipe():
+    specs, _ = consent.menu_specs(None, PLAN_T1)
+    text = consent.render_question(["contract"], specs, [], stream=io.StringIO())
+    assert "\x1b" not in text
+    assert ui.DECISION_BANNER in text and "[1]" in text
+
+
+def test_run_dialog_passes_stream_to_menu(tmp_path):
+    specs, _ = consent.menu_specs(None, PLAN_T1)
+    tty = TTY()
+    said = []
+    it = iter(["q"])
+    decision = consent.run_dialog(
+        specs, contract_block=["contract"], manual=[], mode=MODE,
+        audit_path=str(tmp_path / "audit.log"), echo=said.append,
+        input_fn=lambda prompt="": next(it), stream=tty)
+    assert decision["status"] == "abort"
+    assert f"\x1b[1;33m{ui.DECISION_BANNER}\x1b[0m" in said[0]

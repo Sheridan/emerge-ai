@@ -1,8 +1,15 @@
+import io
 import json
 
 import pytest
 
+from emerge_ai import ui
 from emerge_ai.gate import Variant, autonomy_decision, gate, render
+
+
+class TTY(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def scripted(*answers):
@@ -36,6 +43,32 @@ def test_render_shows_pros_cons_risks_with_tiers():
     assert "+ simple" in text and "- " not in text.split("simple")[1].split("\n")[0]
     assert "! risk: glibc tier 1" in text
     assert "[c]" in text and "[q]" in text
+
+
+# --- decision-block highlighting (spec: console-output, decision highlight) ---
+
+
+def test_render_decision_block_painted_on_tty(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    tty = TTY()
+    text = render(variants([]), stream=tty)
+    assert f"\x1b[1;33m{ui.DECISION_BANNER}\x1b[0m" in text
+    assert "\x1b[32m[1]\x1b[0m\x1b[33m retry merge  (fix)\x1b[0m" in text
+    assert "\x1b[33m      + simple\x1b[0m" in text
+    assert "\x1b[33m      ! risk: glibc tier 1\x1b[0m" in text
+    assert "\x1b[33m[c] propose your own text   [q] quit (no changes)\x1b[0m" in text
+    lines = text.split("\n")
+    assert lines[0] == "" and lines[-1] == ""  # blank separation around the block
+
+
+def test_render_decision_block_plain_in_pipe():
+    pipe = io.StringIO()
+    text = render(variants([]), stream=pipe)
+    assert "\x1b" not in text
+    lines = text.split("\n")
+    assert lines[0] == "" and lines[1] == ui.DECISION_BANNER
+    assert lines[2] == "[1] retry merge  (fix)"
+    assert lines[-1] == ""
 
 
 def test_apply_only_after_explicit_yes(tmp_path):

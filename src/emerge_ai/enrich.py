@@ -148,6 +148,10 @@ def plan_digest(plan, estimate=genlop_estimate, stream=None, summarize=None,
                 for f in llm_findings:
                     what = f.get("cpv") or f.get("atom") or "-"
                     evidence = str(f.get("evidence") or "").strip()[:200]
-                    lines.append(ui.paint(stream, content_sgr,
-                                          f"  - {f.get('kind')} {what}: {evidence}"))
+                    kind = f.get("kind")
+                    # the kind token gets the fixed importance scale, the rest
+                    # of the line keeps the digest content color (design D4)
+                    lines.append("  - "
+                                 + ui.paint(stream, ui.kind_sgr(kind), str(kind))
+                                 + ui.paint(stream, content_sgr, f" {what}: {evidence}"))
     return "\n".join(lines)

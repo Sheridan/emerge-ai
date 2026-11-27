@@ -45,7 +45,9 @@ sudo emerge-ai -a sys-apps/baselayout
 # 1. основной сценарий: реальная поломка world на живом хосте, ответить на один вопрос
 sudo emerge-ai -uDN @world
 #   → при сбое агент, если фактов не хватает, печатает в stderr вопрос
-#     (question-цвет) и пронумерованные варианты с последствиями (content-цвет);
+#     (question-цвет) и пронумерованные варианты с последствиями (блок решений:
+#     баннер «── decisions», жёлтое тело, зелёные цифры — см.
+#     highlight-decisions-and-findings);
 #   → строка выбора «[1..n] choose, [c] own text, [q] quit: » — bold yellow;
 #   → набранный ответ эхом печатается «> ...» и попадает в proposal модели;
 #   → во время ожидания ввода ничего не выполняется: emerge не запускается,
@@ -453,3 +455,33 @@ from emerge_ai import config_edit
 print(config_edit.remove_by_run('<run-id>'))   # […/package.license]
 print(config_edit.remove_by_run('<run-id>'))   # [] — идемпотентно
 "
+
+## Подсветка блоков решений и типов находок (highlight-decisions-and-findings, выполняет пользователь)
+
+Нужен настоящий терминал (TTY) и возможность повторить команду в pipe.
+
+```bash
+# 1) consent-меню в цветном терминале (деградированный план, любой masked-пакет):
+sudo emerge-ai -av =app-container/edk2-bin
+#   → перед списком: пустая строка и баннер «── decisions ──…» (жёлтый жирный),
+#     после блока — пустая строка;
+#   → строки вариантов «[1] …» жёлтые, цифра «[1]» — зелёная; pros/cons/risks
+#     тоже жёлтые; «[c]»/«[q]» без зелёного (общее тело блока).
+
+# 2) вопрос агента (живой endpoint, интерактивный прогон с дефицитом фактов):
+sudo emerge-ai -uDN @world
+#   → строка вопроса сохраняет question-цвет из llm_colors; опции — жёлтый
+#     блок с зелёными цифрами «1.»; кастомный llm_colors (в т.ч. content=off)
+#     цвета блока не меняет.
+
+# 3) advisory-отчёт триажа деградированного плана (rc 0, что-то не смержится):
+sudo emerge-ai -uDN @world -av
+#   → TTY: теги [severity]/[dep-conflict]/[conflict]/[empty-update] красные,
+#     [masked]/[world-file]/[dep-required]/[config-updating] жёлтые,
+#     [important]/[warning] циановые; окрашен только тег, остальная строка без кода;
+#   → kind-токены строк «llm findings» дайджеста — та же шкала.
+
+# 4) plain-режимы: тот же текст без escape-кодов, разделимость видна:
+sudo emerge-ai -uDN @world -av >run.log 2>&1; grep -c $'\x1b' run.log   # → 0
+NO_COLOR=1 sudo emerge-ai -av =app-container/edk2-bin                    # в TTY без кодов
+#   → в файле видны «── decisions», пустые строки-разделители и теги [{kind}]

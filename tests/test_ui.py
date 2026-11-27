@@ -187,8 +187,11 @@ def test_render_question_on_tty_uses_palette():
     )
     out = tty.getvalue()
     assert "\x1b[33mWhich init do you run?\x1b[0m" in out
-    assert "\x1b[36m  1. systemd — rebuilds 12 packages\x1b[0m" in out
-    assert "\x1b[36m  2. openrc — keeps the current queue\x1b[0m" in out
+    # decision block: blank line, bold-yellow banner, yellow body, green numbers
+    assert f"\n\x1b[1;33m{ui.DECISION_BANNER}\x1b[0m\n" in out
+    assert "\x1b[32m  1.\x1b[0m\x1b[33m systemd — rebuilds 12 packages\x1b[0m" in out
+    assert "\x1b[32m  2.\x1b[0m\x1b[33m openrc — keeps the current queue\x1b[0m" in out
+    assert out.endswith("\x1b[32m  2.\x1b[0m\x1b[33m openrc — keeps the current queue\x1b[0m\n\n")
 
 
 def test_render_question_plain_in_pipe():
@@ -197,7 +200,9 @@ def test_render_question_plain_in_pipe():
         "Which init?", [{"label": "systemd", "consequences": "rebuilds 12"}],
         ui.DEFAULT_LLM_COLORS, pipe,
     )
-    assert pipe.getvalue() == "Which init?\n  1. systemd — rebuilds 12\n"
+    assert pipe.getvalue() == (
+        f"Which init?\n\n{ui.DECISION_BANNER}\n  1. systemd — rebuilds 12\n\n"
+    )
 
 
 def test_render_question_without_color_env(monkeypatch):
@@ -205,23 +210,76 @@ def test_render_question_without_color_env(monkeypatch):
     tty = TTY()
     ui.render_question("Which init?", [{"label": "s", "consequences": "c"}], None, tty)
     assert "\x1b" not in tty.getvalue()
+    # the structural separation survives without color
+    assert ui.DECISION_BANNER in tty.getvalue()
 
 
 def test_render_question_empty_options_prints_only_question():
     pipe = io.StringIO()
     ui.render_question("Anything you know?", [], ui.DEFAULT_LLM_COLORS, pipe)
+    # no options -> no decision block at all: no banner, no blank lines
     assert pipe.getvalue() == "Anything you know?\n"
 
 
 def test_render_question_consequences_missing_or_custom_palette():
     pipe = io.StringIO()
     ui.render_question("q", [{"label": "  unmask  ", "consequences": "  "}], None, pipe)
-    assert pipe.getvalue() == "q\n  1. unmask\n"
+    assert pipe.getvalue() == f"q\n\n{ui.DECISION_BANNER}\n  1. unmask\n\n"
     tty = TTY()
     ui.render_question("q", [{"label": "a", "consequences": "b"}], {"question": "off"}, tty)
     out = tty.getvalue()
-    assert out.startswith("q\n")  # question off -> plain, options keep content color
-    assert "\x1b[36m  1. a — b\x1b[0m" in out
+    assert out.startswith("q\n")  # question off -> plain; the block keeps fixed colors
+    assert "\x1b[32m  1.\x1b[0m\x1b[33m a — b\x1b[0m" in out
+
+
+# --- decision-block chrome and kind scale (spec: console-output) ------------
+
+
+def test_decision_helpers_painted_on_tty(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    tty = TTY()
+    assert ui.decision_banner_line(tty) == f"\x1b[1;33m{ui.DECISION_BANNER}\x1b[0m"
+    assert ui.decision_choice(tty, "[1]", " Merge") == "\x1b[32m[1]\x1b[0m\x1b[33m Merge\x1b[0m"
+    assert ui.decision_text(tty, "[c] own text") == "\x1b[33m[c] own text\x1b[0m"
+
+
+def test_decision_helpers_plain_in_pipe_and_no_color(monkeypatch):
+    pipe = io.StringIO()
+    assert ui.decision_banner_line(pipe) == ui.DECISION_BANNER
+    assert ui.decision_choice(pipe, "[1]", " Merge") == "[1] Merge"
+    assert ui.decision_text(pipe, "[c] own text") == "[c] own text"
+    monkeypatch.setenv("NO_COLOR", "1")
+    tty = TTY()
+    assert "\x1b" not in ui.decision_banner_line(tty)
+    assert "\x1b" not in ui.decision_choice(tty, "[1]", " Merge")
+
+
+def test_decision_banner_is_fixed_width_single_line():
+    assert len(ui.DECISION_BANNER) == 40
+    assert "\n" not in ui.DECISION_BANNER
+
+
+def test_kind_sgr_importance_scale():
+    red = ui.color_sgr("red")
+    yellow = ui.color_sgr("yellow")
+    cyan = ui.color_sgr("cyan")
+    assert ui.kind_sgr("severity") == red
+    assert ui.kind_sgr("dep-conflict") == red
+    assert ui.kind_sgr("conflict") == red
+    assert ui.kind_sgr("empty-update") == red
+    assert ui.kind_sgr("masked") == yellow
+    assert ui.kind_sgr("dep-required") == yellow
+    assert ui.kind_sgr("config-updating") == yellow
+    assert ui.kind_sgr("world-file") == yellow
+    assert ui.kind_sgr("important") == cyan
+    assert ui.kind_sgr("warning") == cyan
+
+
+def test_kind_sgr_unknown_and_junk_paint_plain():
+    assert ui.kind_sgr("other") == ""
+    assert ui.kind_sgr("") == ""
+    assert ui.kind_sgr(None) == ""
+    assert ui.kind_sgr({"kind": "masked"}) == ""
 
 
 def test_choice_prompt_styled_on_tty_plain_in_pipe():

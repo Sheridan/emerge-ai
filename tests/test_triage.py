@@ -3,7 +3,14 @@ the fixtures below mirror a real `emerge-ai @world -uDN --keep-going -av` run
 (rc 0, edk2/qemu conflict, yazi skipped via the masked jemalloc, world-file
 problem, IMPORTANT config line, Total: 0 packages)."""
 
+import io
+
 from emerge_ai import triage
+
+
+class TTY(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 # real degraded plan: rc == 0, but nothing is merged and four problems speak
 LIVE_DEGRADED = """These are the packages that would be merged, in order:
@@ -165,6 +172,48 @@ def test_render_report_advisory_only_no_questions():
     assert "not executable by emerge-ai yet" in report
     assert "/runs/r1/plan-output.txt" in report
     assert "?" not in report  # advisory: zero questions
+
+
+# --- kind-tag importance colors (spec: console-output, kind colors) ---------
+
+
+def test_render_report_kind_tags_painted_on_tty(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    v = triage.scan(LIVE_DEGRADED, UPDATE_ARGV)
+    report = "\n".join(triage.render_report(v, stream=TTY()))
+    # merge-blocking criticals red, actionable conditions yellow, tag only
+    assert "\x1b[31m[severity]\x1b[0m" in report
+    assert "\x1b[31m[dep-conflict]\x1b[0m" in report
+    assert "\x1b[31m[conflict]\x1b[0m" in report
+    assert "\x1b[31m[empty-update]\x1b[0m" in report
+    assert "\x1b[33m[world-file]\x1b[0m" in report
+    assert "\x1b[33m[masked]\x1b[0m" in report
+    assert "\x1b[33m[config-updating]\x1b[0m" in report
+    assert "\x1b[0m line " in report  # the evidence text stays unpainted
+    assert "\x1b[33m  [masked]" not in report  # not the whole line
+
+
+def test_render_report_informational_kinds_cyan():
+    v = triage.Verdict(triage.DEGRADED, [
+        triage.Finding("important", None, " * IMPORTANT: config protected", 0),
+        triage.Finding("warning", None, "WARNING: something generic", 1),
+    ])
+    report = "\n".join(triage.render_report(v, stream=TTY()))
+    assert "\x1b[36m[important]\x1b[0m" in report
+    assert "\x1b[36m[warning]\x1b[0m" in report
+
+
+def test_render_report_unknown_kind_plain_even_on_tty():
+    v = triage.Verdict(triage.DEGRADED, [triage.Finding("other", None, "note", 0)])
+    report = "\n".join(triage.render_report(v, stream=TTY()))
+    assert "  [other] line 1: note" in report  # no codes around an unscaled tag
+
+
+def test_render_report_plain_in_pipe():
+    v = triage.scan(LIVE_DEGRADED, UPDATE_ARGV)
+    report = "\n".join(triage.render_report(v, stream=io.StringIO()))
+    assert "\x1b" not in report
+    assert "  [masked] line " in report
 
 
 def test_plan_incident_references_full_text_without_truncation():

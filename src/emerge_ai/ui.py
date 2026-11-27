@@ -35,8 +35,31 @@ QUESTION_PREFIX = "QUESTION:"
 # Risk-tier gradient for plan digest / doctor lines (design D2).
 TIER_GRADIENT = {1: "red", 2: "yellow", 3: "green", 4: "cyan", 5: "dim"}
 
+# Finding-kind importance scale (spec: console-output, kind colors): red means
+# merge-blocking criticals, yellow an actionable condition, cyan informational;
+# unknown kinds paint plain. Fixed palette — llm_colors does not reach it.
+KIND_COLORS = {
+    "severity": "red",
+    "dep-conflict": "red",
+    "conflict": "red",
+    "empty-update": "red",
+    "masked": "yellow",
+    "dep-required": "yellow",
+    "config-updating": "yellow",
+    "world-file": "yellow",
+    "important": "cyan",
+    "warning": "cyan",
+}
+
 PREFIX = "emerge-ai: "
 PROMPT_SGR = "1;33"  # bold + yellow: consent prompts stand out (design D2)
+
+# Decision-block chrome (spec: console-output, decision highlighting): fixed
+# colors, never llm_colors; the banner separates a menu from prose even where
+# color is off (design D2).
+DECISION_BODY = "yellow"
+DECISION_NUM = "green"
+DECISION_BANNER = ("── decisions " + "─" * 40)[:40]
 
 
 def supports_color(stream) -> bool:
@@ -57,6 +80,13 @@ def color_sgr(name) -> str:
     if name is None:
         return ""
     return COLOR_SGR.get(name, "")
+
+
+def kind_sgr(kind) -> str:
+    """SGR for a finding-kind token from KIND_COLORS; unknown names and
+    non-strings paint plain, like color_sgr."""
+    name = KIND_COLORS.get(kind) if isinstance(kind, str) else None
+    return color_sgr(name)
 
 
 def paint(stream, sgr: str, text: str) -> str:
@@ -270,6 +300,28 @@ def prompt(text: str, stream=None) -> str:
     return paint(sys.stdout if stream is None else stream, PROMPT_SGR, text)
 
 
+# --- decision-choice block chrome (spec: console-output, decision highlight) --
+
+def decision_banner_line(stream) -> str:
+    """Fence line opening a decision block: bold yellow on a color stream, the
+    very same plain text where color is off. Printed with a blank line before
+    it and followed by a blank line after the block (design D2)."""
+    return paint(stream, PROMPT_SGR, DECISION_BANNER)
+
+
+def decision_choice(stream, num_token: str, text: str) -> str:
+    """One numbered choice line: the number token green, the block body
+    yellow. Plain streams get the concatenated text untouched."""
+    return (paint(stream, color_sgr(DECISION_NUM), num_token)
+            + paint(stream, color_sgr(DECISION_BODY), text))
+
+
+def decision_text(stream, text: str) -> str:
+    """A non-numbered line inside a decision block (details, [c]/[q] hints):
+    the block's yellow body."""
+    return paint(stream, color_sgr(DECISION_BODY), text)
+
+
 def resolve_palette(llm_colors, warn=None) -> dict:
     """Validate the llm_colors mapping (design D4): whitelist names only, raw
     escape strings never reach the terminal; invalid/missing -> default."""
@@ -312,18 +364,26 @@ CHOICE_HINT = "[{choices}] choose, [c] own text, [q] quit: "
 
 def render_question(question: str, options, palette, stream) -> None:
     """Print one operator question with numbered options (design D6): the
-    question line takes the palette's question color, the options and their
-    consequences the content color. Coloring is per stream, so a pipe,
-    NO_COLOR or TERM=dumb renders the very same text plain."""
+    question line takes the palette's question color, the options form the
+    highlighted decision block (spec: console-output) — a blank line, the
+    banner, yellow option lines with green numbers, a closing blank line.
+    Without options no choice block is shown. Coloring is per stream, so a
+    pipe, NO_COLOR or TERM=dumb renders the very same text plain; the blank
+    lines and the banner stay either way."""
     pal = resolve_palette(palette)
     print(paint(stream, color_sgr(pal["question"]), question), file=stream)
-    for num, option in enumerate(options or (), start=1):
+    if not options:
+        return
+    print(file=stream)
+    print(decision_banner_line(stream), file=stream)
+    for num, option in enumerate(options, start=1):
         label = str(option.get("label", "")).strip()
         consequences = str(option.get("consequences", "")).strip()
-        line = f"  {num}. {label}"
+        body = f" {label}"
         if consequences:
-            line += f" — {consequences}"
-        print(paint(stream, color_sgr(pal["content"]), line), file=stream)
+            body += f" — {consequences}"
+        print(decision_choice(stream, f"  {num}.", body), file=stream)
+    print(file=stream)
 
 
 def choice_prompt(count: int, stream=None) -> str:

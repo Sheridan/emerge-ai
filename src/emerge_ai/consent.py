@@ -173,8 +173,10 @@ def menu_specs(verdict, plan, *, world: list[str] | None = None,
 
 
 def render_question(contract_block: list[str], specs: list[MenuSpec],
-                    manual: list[str], note: str = "") -> str:
-    """Fixed short-line format (design risk): contract, variants, advice."""
+                    manual: list[str], note: str = "", stream=None) -> str:
+    """Fixed short-line format (design risk): contract, variants, advice.
+    `stream` only decides the menu coloring (design D3), echo goes to the
+    same stream."""
     variants = [gate.Variant(key=s.key, title=s.title, kind=s.kind, tiers=s.tiers,
                              pros=s.detail)
                 for s in specs]
@@ -182,7 +184,7 @@ def render_question(contract_block: list[str], specs: list[MenuSpec],
     if manual:
         out.append("unresolved findings:")
         out.extend(manual)
-    out.append(gate.render(variants))
+    out.append(gate.render(variants, stream=stream))
     if note:
         out.append(ui.warn(note))
     return "\n".join(out)
@@ -247,7 +249,8 @@ def parse_analysis(reply: str) -> tuple[str, list]:
 
 def run_dialog(specs: list[MenuSpec], *, contract_block: list[str], manual: list[str],
                mode: dict, audit_path, echo=print, input_fn=None,
-               analyze=None, execute=None, confirm_required: bool = False) -> dict:
+               analyze=None, execute=None, confirm_required: bool = False,
+               stream=None) -> dict:
     """The consent loop (no round counter by design D5): number -> gate core;
     y/n -> legacy equivalence (merge as-is / abort, design D7); free text ->
     model channel -> menu again; EOF/quit -> 'no answer', zero mutations.
@@ -258,7 +261,7 @@ def run_dialog(specs: list[MenuSpec], *, contract_block: list[str], manual: list
         return {"status": "empty"}
     note = ""
     while True:
-        echo(render_question(contract_block, specs, manual, note))
+        echo(render_question(contract_block, specs, manual, note, stream=stream))
         note = ""
         raw = None
         try:

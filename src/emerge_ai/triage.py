@@ -12,6 +12,7 @@ evidence lines (conflicts with / required by / masked by:) plus the shape flag
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import asdict, dataclass, field
 
 from emerge_ai import ui
@@ -284,21 +285,25 @@ def candidates(findings: list[Finding], *, world: list[str] | None = None) -> li
 
 def render_report(verdict: Verdict | None, plan_output: str | None = None,
                   for_pretend: bool = False,
-                  world: list[str] | None = None) -> list[str]:
+                  world: list[str] | None = None, stream=None) -> list[str]:
     """The advisory report shared by --pretend and the mutation modes (D6):
     what happened, what will NOT be merged, candidate whitelist actions; never
     a question, never an action. `world` is the same membership list the
     consent menu validates with, so report and menu agree on what is
-    executable."""
+    executable. Finding-kind tags get the fixed importance colors (design D4);
+    `stream` only decides coloring and must match the stream the lines are
+    printed to (design D3)."""
     if verdict is None or not verdict.degraded:
         return []
+    stream = sys.stdout if stream is None else stream
     lines = [
         f"emerge-ai plan triage: plan DEGRADED despite exit code 0 "
         f"({len(verdict.findings)} finding(s)) — these packages will NOT be merged:"
     ]
     for f in verdict.findings:
         target = f" {f.cpv}" if f.cpv else ""
-        lines.append(f"  [{f.kind}] line {f.line_no + 1}:{target} {f.evidence}")
+        tag = ui.paint(stream, ui.kind_sgr(f.kind), f"[{f.kind}]")
+        lines.append(f"  {tag} line {f.line_no + 1}:{target} {f.evidence}")
     cands = candidates(verdict.findings, world=world)
     executable = [c for c in cands if c["executable"]]
     blocked = [c for c in cands if not c["executable"]]
