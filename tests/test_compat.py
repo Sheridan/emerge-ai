@@ -1,6 +1,6 @@
 import pytest
 
-from emerge_ai.compat import check_version_compat
+from aimerge.compat import check_version_compat
 
 
 @pytest.mark.parametrize(

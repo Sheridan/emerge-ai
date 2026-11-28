@@ -28,7 +28,7 @@
   формулировками consent — разойтись они не могут, потому что источник один.
 - Раскладка из `fix-package-edit-directory-target` применяется к новому имени
   на тех же правах: каталог `package.license` → запись в
-  `package.license/<category>`, резерв `package.license/emerge-ai` для строк
+  `package.license/<category>`, резерв `package.license/aimerge` для строк
   без категории; файлы `package.accept_license` канал больше ни при каких
   условиях не создаёт.
 - Ни один существующий путь не меняет поведение: сегодня ни один продюсер не
@@ -56,10 +56,10 @@
 
 ## Impact
 
-- `src/emerge_ai/config_edit.py`: таблица `CHANNEL_FILE` + `channel_file(kind)`;
+- `src/aimerge/config_edit.py`: таблица `CHANNEL_FILE` + `channel_file(kind)`;
   `resolve_package_target`, `destination_label`, `UNDO_TABLE`, `undo_text`,
   `package_files` переходят на неё. `KINDS` не меняется.
-- `src/emerge_ai/cli.py`: сообщение дубль-проверки `package.<kind>: '…' already
+- `src/aimerge/cli.py`: сообщение дубль-проверки `package.<kind>: '…' already
   present` печатает имя канала из той же таблицы (иначе оно расходится с
   фактическим файлом правки).
 - Порядок применения: после `fix-package-edit-directory-target` — правка

@@ -29,7 +29,7 @@
 ## 4. Интеграционная проверка
 
 - [x] 4.1 `pytest -m "not integration"` — всё зелёное
-- [x] 4.2 Живая проверка на стенде (секция `LIVE_CHECKS.md`): `sudo emerge-ai -auDN
+- [x] 4.2 Живая проверка на стенде (секция `LIVE_CHECKS.md`): `sudo aimerge -auDN
       @world -p` на очереди с `[ebuild U ~]` показывает реальное число пакетов в digest и
       в consent-меню (`--ask`), не «0 package(s), tiers unknown»; зафиксировать результат
 

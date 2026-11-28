@@ -1,7 +1,7 @@
 import json
 
-from emerge_ai import state
-from emerge_ai.digest import parse_installed, post_run_digest
+from aimerge import state
+from aimerge.digest import parse_installed, post_run_digest
 
 MERGE_OUT = """Calculating dependencies... done!
 [ebuild  N     ] app-misc/foo-1.2::gentoo  USE="x"
@@ -46,14 +46,14 @@ def test_parse_installed_counts_masked_status_flags():
 
 
 def test_post_run_digest_on_colored_output_lists_packages():
-    from emerge_ai.flags import Mode
+    from aimerge.flags import Mode
     run = state.new_run(["world"], Mode())
     text = post_run_digest(run, COLORED_MERGE)
     assert "app-misc/foo-1.2" in text and "nothing" not in text
 
 
 def test_post_run_digest_content():
-    from emerge_ai.flags import Mode
+    from aimerge.flags import Mode
     run = state.new_run(["world"], Mode())
     run.incident = {"class": "compile"}
     run.agent_proposal = "add =dev-libs/bar-2.0 to keywords\nmore text"

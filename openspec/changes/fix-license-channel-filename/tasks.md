@@ -53,7 +53,7 @@
       юнитами: tmp-корень с каталогом `package.license` → запись в
       `package.license/<category>` (`destination_label` даёт
       `package.license/<category>`), строка без категории →
-      `package.license/emerge-ai`, подкаталог вместо файла категории →
+      `package.license/aimerge`, подкаталог вместо файла категории →
       `ChannelError` с этим путём.
 - [x] 3.2 Docs: README (раздел про канал правки `package.*`) — имя файла
       лицензий как исключение из «имя вида = имя файла»; в

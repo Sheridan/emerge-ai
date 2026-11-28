@@ -5,8 +5,8 @@ import re
 
 import pytest
 
-from emerge_ai import agent
-from emerge_ai.agent import (
+from aimerge import agent
+from aimerge.agent import (
     ASK_TOOL_SPEC,
     CLASS_SKELETONS,
     TOOL_SPECS,
@@ -16,12 +16,12 @@ from emerge_ai.agent import (
     typed_variants,
     validate_question,
 )
-from emerge_ai.llm import LLMClient, Response, ToolCall
-from emerge_ai.config import Config
-from emerge_ai.sandbox import Sandbox
+from aimerge.llm import LLMClient, Response, ToolCall
+from aimerge.config import Config
+from aimerge.sandbox import Sandbox
 
-ENDPOINT = os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1")
-MODEL = os.environ.get("EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl")
+ENDPOINT = os.environ.get("AIMERGE_TEST_ENDPOINT", "http://127.0.0.1:8080/v1")
+MODEL = os.environ.get("AIMERGE_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl")
 
 BUILD_LOG = (
     "\n".join(f"cc -c noise{i}.c" for i in range(300))
@@ -125,7 +125,7 @@ def test_dispatch_announces_tool_calls_with_capped_args(jail, capsys):
     agent = IncidentAgent(client, sb, rules="R", max_rounds=6)
     result = agent.propose(incident(log))
     err = capsys.readouterr().err
-    line = next(l for l in err.splitlines() if l.startswith("emerge-ai: tool: grep_log("))
+    line = next(l for l in err.splitlines() if l.startswith("aimerge: tool: grep_log("))
     assert "[capped," in line and len(line) < 320  # 200-char cap + marker + prefix
     assert [t[0] for t in result.trace] == ["grep_log"]
 
@@ -535,7 +535,7 @@ def test_limit_eof_answer_finishes(jail, tmp_path):
 
 
 def test_limit_narrow_choice_shrinks_tool_results(jail, tmp_path):
-    from emerge_ai.agent import MAX_TOOL_RESULT_CHARS
+    from aimerge.agent import MAX_TOOL_RESULT_CHARS
 
     sb, log = jail
     client = ScriptedClient([
@@ -581,7 +581,7 @@ def test_limit_noninteractive_audits_and_never_asks(jail, tmp_path, capsys):
 def test_limit_other_errors_keep_the_unfazed_agent_stopped_path(jail, tmp_path):
     # spec «Сбой эндпоинта — не лимит»: genuine failures keep old semantics
     sb, log = jail
-    from emerge_ai.llm import LLMError
+    from aimerge.llm import LLMError
 
     class BrokenClient:
         def chat(self, messages, tools=None, temperature=0.2):
@@ -616,7 +616,7 @@ def test_agent_live_replay_compile_fixture():
 
 
 def _live_replay_once(pathlib, shutil):
-    tmp_root = f"/tmp/emerge-ai-agent-replay-{'a'}"
+    tmp_root = f"/tmp/aimerge-agent-replay-{'a'}"
     shutil.rmtree(tmp_root, ignore_errors=True)
     jaildir = pathlib.Path(tmp_root)
     jaildir.mkdir(parents=True)
@@ -649,7 +649,7 @@ OPERATOR_ONLY_INCIDENT = {
         " [blockers/B,installed slots=*] 'dev-util/glslang-1.3'::gentoo"
         " (blocked-by) 'dev-util/shaderc-2024.2'\n"
         " * Choosing between unmerging dev-util/shaderc and keeping glslang pinned to 1.3"
-        " depends on whether the operator still needs shaderc: emerge-ai cannot know that.\n"
+        " depends on whether the operator still needs shaderc: aimerge cannot know that.\n"
     ),
 }
 

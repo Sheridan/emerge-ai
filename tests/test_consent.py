@@ -4,9 +4,9 @@ deterministic menu, gate-core execution, model channel, aborts."""
 import io
 import json
 
-from emerge_ai import consent, triage, ui
-from emerge_ai.llm import Response, ToolCall
-from emerge_ai.plan import Plan, PlanEntry
+from aimerge import consent, triage, ui
+from aimerge.llm import Response, ToolCall
+from aimerge.plan import Plan, PlanEntry
 
 MASKED = ("!!! app-container/edk2-bin-2024:0 is masked by: "
           "package.accept_keywords, ~amd64 keyword required")
@@ -29,7 +29,7 @@ PLAN_REST = Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")])
 
 def test_contract_btrfs_promises_snapshot_and_rescue_rollback():
     text = "\n".join(consent.protect_contract(PLAN_T1, fs="btrfs", run_id="r1"))
-    assert "/.snapshots/emerge-ai/r1" in text
+    assert "/.snapshots/aimerge/r1" in text
     assert "rescue" in text  # honest: snapshots restore offline only
     assert "not saved: /home/" in text
     assert "deleted automatically" in text
@@ -37,7 +37,7 @@ def test_contract_btrfs_promises_snapshot_and_rescue_rollback():
 
 def test_contract_archive_fs_promises_online_rollback():
     text = "\n".join(consent.protect_contract(PLAN_T1, fs="ext4", run_id="r2"))
-    assert "/var/lib/emerge-ai/archives/r2" in text
+    assert "/var/lib/aimerge/archives/r2" in text
     assert "online" in text and "no reboot" in text
     assert "(root fs: ext4" in text
 
@@ -90,7 +90,7 @@ def test_menu_degraded_typed_variants_and_manual_advice():
     # now, carrying its backup + undo wording in the consent detail
     em = next(s for s in specs if s.key == "emaint-world")
     assert em.action == {"type": "command", "name": "emaint-fix-world", "slots": {}}
-    assert any("world.emerge-ai." in line for line in em.detail)  # the backup copy
+    assert any("world.aimerge." in line for line in em.detail)  # the backup copy
     assert any(line.startswith("undo:") for line in em.detail)
     ak = next(s for s in specs if s.key.startswith("ak-"))
     assert ak.action["type"] == "package-edit"
@@ -124,7 +124,7 @@ def test_menu_four_findings_four_executable_variants():
     names = {s.action.get("name") for s in fixes if s.action["type"] == "command"}
     assert types == {"package-edit", "etc-update", "command"}
     assert names == {"emaint-fix-world", "emerge-deselect"}
-    assert all(any(line.startswith("undo:") or "pre-emerge-ai" in line
+    assert all(any(line.startswith("undo:") or "pre-aimerge" in line
                    for line in s.detail) for s in fixes)  # every item says undo
 
 
@@ -136,7 +136,7 @@ def test_menu_names_the_category_file_on_a_directory_layout_host(tmp_path):
     ak = next(s for s in specs if s.key.startswith("ak-"))
     assert ("edit: package.accept_keywords/app-container: "
             "=app-container/edk2-bin-2024 ~amd64") in ak.detail
-    assert ("undo: remove the run's lines (audit marker '# emerge-ai:') from "
+    assert ("undo: remove the run's lines (audit marker '# aimerge:') from "
             "package.accept_keywords/app-container") in ak.detail
     assert ak.title.endswith("to package.accept_keywords/app-container and re-plan")
 
@@ -476,7 +476,7 @@ def test_dialogue_any_round_failure_degrades_to_note():
 
 
 def test_dialogue_limit_exhausted_degrades_like_channel_failure():
-    from emerge_ai.llm import LimitExhausted
+    from aimerge.llm import LimitExhausted
     dlg = consent.ConsentDialogue(DialogueClient([LimitExhausted("rounds")]))
     comment, order = dlg.analyze("what now?", [MERGE_SPEC])
     assert "consent analysis unavailable" in comment and "limit exhausted" in comment
@@ -516,7 +516,7 @@ def test_dialogue_dispatch_runs_tools_on_the_sandbox_and_records_exchange():
 def test_dialogue_forces_a_conclusion_when_tool_budget_runs_out():
     """Live calibration (task 5.1): an endpoint that spends the whole tool
     budget is researching — the round must end with an answer, not a note."""
-    from emerge_ai.llm import LimitExhausted
+    from aimerge.llm import LimitExhausted
 
     class BudgetClient:
         def __init__(self):

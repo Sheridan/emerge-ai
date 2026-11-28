@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from emerge_ai.config import Config, ConfigError, load_config, require_endpoint
+from aimerge.config import Config, ConfigError, load_config, require_endpoint
 
 
 def test_defaults():

@@ -1,8 +1,8 @@
 import io
 
-from emerge_ai.doctor import doctor_report, is_mass_update
-from emerge_ai.enrich import format_duration, parse_genlop, plan_digest
-from emerge_ai.plan import Plan, PlanEntry
+from aimerge.doctor import doctor_report, is_mass_update
+from aimerge.enrich import format_duration, parse_genlop, plan_digest
+from aimerge.plan import Plan, PlanEntry
 
 
 class TTY(io.StringIO):
@@ -160,7 +160,7 @@ def test_plan_digest_summary_prompt_carries_language_directive():
 
 
 def test_parse_summary_reply_accepts_russian_human_fields():
-    from emerge_ai.enrich import parse_summary_reply
+    from aimerge.enrich import parse_summary_reply
 
     summary, findings = parse_summary_reply(
         '{"summary": "Обновление openssl: перезапустить службы", "findings": []}')

@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from emerge_ai.llm import LLMError, Response
-from emerge_ai.tiers import (
+from aimerge.llm import LLMError, Response
+from aimerge.tiers import (
     TierService,
     distribution,
     most_critical,
@@ -11,7 +11,7 @@ from emerge_ai.tiers import (
     package_of,
     snapshot_required,
 )
-from emerge_ai.tiers import Classification
+from aimerge.tiers import Classification
 
 
 class FakeClient:

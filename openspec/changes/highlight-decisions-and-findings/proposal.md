@@ -7,7 +7,7 @@
 печатаются вовсе без цвета, а варианты в `ui.render_question` окрашиваются цветом текста LLM.
 Оператор, смотрящий на деградированный план в терминале, периферийным зрением не видит, где
 начинается блок, требующий ответа, и насколько критична каждая находка (`!!!` против
-` * IMPORTANT:`). Цвет уже повсюду в emerge-ai (tier-градиент, ошибки/предупреждения) — кроме
+` * IMPORTANT:`). Цвет уже повсюду в aimerge (tier-градиент, ошибки/предупреждения) — кроме
 самых ответственных интерактивных мест.
 
 ## What Changes
@@ -45,14 +45,14 @@
 
 ## Impact
 
-- `src/emerge_ai/ui.py` — константы и помощники подсветки решений (баннер, цвета блока/цифр),
+- `src/aimerge/ui.py` — константы и помощники подсветки решений (баннер, цвета блока/цифр),
   `KIND_COLORS`/`kind_sgr`; `render_question`: варианты уходят из палитры `llm_colors` в
   фиксированную.
-- `src/emerge_ai/gate.py` — `render()` получает необязательный `stream` и красит меню.
-- `src/emerge_ai/consent.py` — `render_question`/`run_dialog` пробрасывают stream в `gate.render`.
-- `src/emerge_ai/triage.py` — `render_report(..., stream=...)` красит теги `[{kind}]`.
-- `src/emerge_ai/enrich.py` — kind-токены находок дайджеста по той же шкале.
-- `src/emerge_ai/cli.py` — передаёт `plan_stream` в `triage.render_report` и stream в диалог.
+- `src/aimerge/gate.py` — `render()` получает необязательный `stream` и красит меню.
+- `src/aimerge/consent.py` — `render_question`/`run_dialog` пробрасывают stream в `gate.render`.
+- `src/aimerge/triage.py` — `render_report(..., stream=...)` красит теги `[{kind}]`.
+- `src/aimerge/enrich.py` — kind-токены находок дайджеста по той же шкале.
+- `src/aimerge/cli.py` — передаёт `plan_stream` в `triage.render_report` и stream в диалог.
 - Тесты: `test_ui`, `test_gate`, `test_consent`, `test_triage`, `test_enrich*`, `test_cli`
   (строки меню/отчёта; цветной TTY vs plain-pipe vs `NO_COLOR`).
 - `README.md`, `LIVE_CHECKS.md` — примеры меню и отчёта.

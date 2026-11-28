@@ -65,10 +65,12 @@ change (контроль — `grep` даёт ноль вхождений вне 
 
 ## Impact
 
-- Код: 87 текстовых файлов вне архива (29 `src/`, 19 `tests/`, 29 `openspec/` live,
-  `pyproject.toml`, `opencode.json`, `README.md`, `LIVE_CHECKS.md`, `DECISIONS.md`,
-  3 файла `prompts/rules/`, 3 файла `packaging/`) плюс два переименовываемых
-  каталога.
+- Код: 108 текстовых файлов (32 `src/`, 34 `tests/`, 32 `openspec/` live — 15 спеков и
+  17 файлов незаархивированных change, `pyproject.toml`, `opencode.json`, `README.md`,
+  `LIVE_CHECKS.md`, `DECISIONS.md`, 3 файла `prompts/rules/`, 2 файла `packaging/`
+  плюс `packaging/aimerge.json.default`) плюс два переименовываемых каталога.
+  Проверено `git ls-files` по шаблону `emerge[-_]ai`: 111 вхождений-файлов, из них
+  3 — артефакты этого change, они старое имя сохраняют сознательно.
 - Модель-фейсинг: `prompts/rules/00-role.md` («You are the repair agent inside
   emerge-ai») и `10-safety.md`/`20-ladder.md` (`/var/lib/emerge-ai/overlay`) —
   9 вхождений, меняются как имя проекта; `emerge-deselect` (имя action в

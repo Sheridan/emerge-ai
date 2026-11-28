@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from emerge_ai.plan import Plan, PlanEntry
-from emerge_ai.rollback import Protection, cleanup, detect_root_fs, protect, rollback
+from aimerge.plan import Plan, PlanEntry
+from aimerge.rollback import Protection, cleanup, detect_root_fs, protect, rollback
 
 T5 = Plan(entries=[PlanEntry("app-editors/vim-9.1", 5, "hint")])
 T1 = Plan(entries=[PlanEntry("sys-libs/glibc-2.42", 1, "hint")])
@@ -122,7 +122,7 @@ def test_registry_written_on_snapshot_and_idempotent(tmp_path):
 
 
 def test_registry_lists_disk_union_and_desync(tmp_path):
-    from emerge_ai.rollback import list_protections
+    from aimerge.rollback import list_protections
 
     snap, arch = tmp_path / "snaps", tmp_path / "arch"
     contents = {"sys-libs/glibc-2.42": ["/etc/hostname"]}
@@ -143,7 +143,7 @@ def test_registry_lists_disk_union_and_desync(tmp_path):
 
 
 def test_cleanup_drops_registry_entry(tmp_path):
-    from emerge_ai.rollback import list_protections
+    from aimerge.rollback import list_protections
 
     snap, arch = tmp_path / "snaps", tmp_path / "arch"
     (tmp_path / "f").write_text("x")
@@ -157,7 +157,7 @@ def test_cleanup_drops_registry_entry(tmp_path):
 
 
 def test_restore_archive_roundtrip(tmp_path):
-    from emerge_ai.rollback import restore_archive
+    from aimerge.rollback import restore_archive
 
     src = tmp_path / "src"
     src.mkdir()
@@ -175,22 +175,22 @@ def test_restore_archive_roundtrip(tmp_path):
 
 def test_btrfs_and_restore_are_announced(monkeypatch, capsys):
     # spec: progress-logging — snapshot/restore commands are significant actions
-    from emerge_ai import rollback as rollback_mod
+    from aimerge import rollback as rollback_mod
 
     class P:
         returncode, stdout, stderr = 0, "ok", ""
 
     monkeypatch.setattr(rollback_mod.subprocess, "run", lambda argv, **kw: P())
     assert rollback_mod._default_btrfs(["subvolume", "snapshot", "-r", "/", "/s/1"]) == "ok"
-    assert "emerge-ai: running: btrfs subvolume snapshot -r / /s/1" in capsys.readouterr().err
+    assert "aimerge: running: btrfs subvolume snapshot -r / /s/1" in capsys.readouterr().err
 
 
 def test_restore_archive_announces(tmp_path, capsys):
-    from emerge_ai import rollback as rollback_mod
+    from aimerge import rollback as rollback_mod
 
     prot = Protection(run_id="r10", archive_dir=str(tmp_path / "nope"))
     try:
         rollback_mod.restore_archive(prot, target_root=str(tmp_path / "root"))
     except Exception:
         pass  # the archive is missing; the announcement precedes the failure
-    assert "emerge-ai: restoring archive" in capsys.readouterr().err
+    assert "aimerge: restoring archive" in capsys.readouterr().err

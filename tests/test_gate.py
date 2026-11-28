@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from emerge_ai import ui
-from emerge_ai.gate import Variant, autonomy_decision, gate, render
+from aimerge import ui
+from aimerge.gate import Variant, autonomy_decision, gate, render
 
 
 class TTY(io.StringIO):
@@ -147,7 +147,7 @@ def test_risk_alias_mode_equals_long_flag():
     """wire-risk-flag: псевдоним — ровно тот же вход матрицы, что длинный флаг."""
     import dataclasses
 
-    from emerge_ai.flags import parse_own_flags
+    from aimerge.flags import parse_own_flags
 
     long_mode = dataclasses.asdict(
         parse_own_flags(["--i-understand-what-i-am-doing-and-take-full-responsibility-for-consequences"])[0]

@@ -1,5 +1,5 @@
 """Live stand check for task 11.2: dummy category resolved through the real
-portage stack; the emerge-ai overlay repo wins the base tree by priority."""
+portage stack; the aimerge overlay repo wins the base tree by priority."""
 
 import json
 import os
@@ -9,12 +9,12 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-OVERLAY = "/var/db/repos/emerge-ai-test"
-BASE = "/var/db/repos/emerge-ai-test-base"
+OVERLAY = "/var/db/repos/aimerge-test"
+BASE = "/var/db/repos/aimerge-test-base"
 
 
 def test_repos_conf_present():
-    for repo in ("emerge-ai-test", "emerge-ai-test-base"):
+    for repo in ("aimerge-test", "aimerge-test-base"):
         conf = f"/etc/portage/repos.conf/{repo}.conf"
         assert os.path.exists(conf), f"stand missing {conf} (see LIVE_CHECKS.md)"
         assert "priority" in open(conf).read()
@@ -38,5 +38,5 @@ def test_overlay_ebuild_wins_tree():
     assert proc.returncode == 0, out[-500:]
     merge_lines = [l for l in out.splitlines() if l.startswith("[ebuild")]
     assert merge_lines, out[-400:]
-    assert "::emerge-ai-test" in merge_lines[0]
-    assert "emerge-ai-test-base" not in merge_lines[0]
+    assert "::aimerge-test" in merge_lines[0]
+    assert "aimerge-test-base" not in merge_lines[0]

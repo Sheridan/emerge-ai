@@ -7,7 +7,7 @@ import pathlib
 
 import pytest
 
-from emerge_ai import whitelist
+from aimerge import whitelist
 
 
 class Proc:
@@ -131,7 +131,7 @@ def test_membership_validator_against_world_list():
 def test_world_backup_is_per_run_and_never_overwritten(tmp_path):
     world = world_file(tmp_path, ["dev-x/y"])
     dest = whitelist.backup_world("run42", world_file=world)
-    assert dest == f"{world}.emerge-ai.run42.bak"
+    assert dest == f"{world}.aimerge.run42.bak"
     assert "dev-x/y" in open(dest).read()
     with open(dest, "w") as fh:
         fh.write("MARKER")  # simulate the earlier copy as the truth
@@ -142,8 +142,8 @@ def test_world_backup_is_per_run_and_never_overwritten(tmp_path):
 def test_undo_text_is_mechanical():
     assert whitelist.undo_text("emerge-deselect", {"atom": "dev-x/y"}) == \
         "emerge --noreplace dev-x/y"
-    text = whitelist.undo_text("emaint-fix-world", {}, backup="/var/lib/portage/world.emerge-ai.r.bak")
-    assert "/var/lib/portage/world.emerge-ai.r.bak" in text
+    text = whitelist.undo_text("emaint-fix-world", {}, backup="/var/lib/portage/world.aimerge.r.bak")
+    assert "/var/lib/portage/world.aimerge.r.bak" in text
 
 
 # --- executor: ordering, TOCTOU, read-only floor ------------------------------
@@ -155,7 +155,7 @@ def test_execute_backups_and_audits_before_running(tmp_path):
 
     def before(argv):  # runs at the exact moment the binary would be invoked
         seen["audit"] = audit_lines(audit)
-        seen["backup"] = open(f"{world}.emerge-ai.r1.bak").read()
+        seen["backup"] = open(f"{world}.aimerge.r1.bak").read()
 
     calls = []
     res = whitelist.execute("emaint-fix-world", {}, run_id="r1",
@@ -179,13 +179,13 @@ def test_execute_announces_full_argv(tmp_path, capsys):
                             audit_path=tmp_path / "audit.jsonl", world_file=world,
                             runner=make_runner(calls))
     assert res["status"] == "executed"
-    assert "emerge-ai: running: emaint --fix world" in capsys.readouterr().err
+    assert "aimerge: running: emaint --fix world" in capsys.readouterr().err
 
 
 def test_rejected_execution_is_not_announced(tmp_path, capsys):
     res = whitelist.execute("rm-rf-everything", {}, runner=lambda *a, **k: Proc())
     assert res["status"] == "rejected"
-    assert "emerge-ai: running" not in capsys.readouterr().err
+    assert "aimerge: running" not in capsys.readouterr().err
 
 
 def test_execute_revalidates_at_apply_time(tmp_path, capsys):

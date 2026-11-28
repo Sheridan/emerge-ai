@@ -1,7 +1,7 @@
 import pytest
 
-from emerge_ai.injection import scan, wrap_untrusted
-from emerge_ai.sandbox import BinaryNotAllowed, JailEscape, Sandbox
+from aimerge.injection import scan, wrap_untrusted
+from aimerge.sandbox import BinaryNotAllowed, JailEscape, Sandbox
 
 
 @pytest.fixture
@@ -51,9 +51,9 @@ def test_run_readonly_announces_allowed_silences_blocked(jail, tmp_path, capsys)
     # rejected by the allowlist never reaches the terminal as an announcement
     with pytest.raises(BinaryNotAllowed):
         jail.run_readonly(["rm", "-rf", str(tmp_path)])
-    assert "emerge-ai:" not in capsys.readouterr().err
+    assert "aimerge:" not in capsys.readouterr().err
     jail.run_readonly(["wc", "-l", jail.roots[0] + "/build.log"])
-    assert f"emerge-ai: running: wc -l {jail.roots[0]}/build.log" in capsys.readouterr().err
+    assert f"aimerge: running: wc -l {jail.roots[0]}/build.log" in capsys.readouterr().err
 
 
 def test_web_fetch_announces_https_only(monkeypatch, capsys):
@@ -61,7 +61,7 @@ def test_web_fetch_announces_https_only(monkeypatch, capsys):
 
     import urllib.request
 
-    from emerge_ai.sandbox import Sandbox
+    from aimerge.sandbox import Sandbox
 
     class _Body(io.BytesIO):
         def __enter__(self):
@@ -73,10 +73,10 @@ def test_web_fetch_announces_https_only(monkeypatch, capsys):
     monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: _Body(b"hello"))
     sb = Sandbox(roots=("/tmp",))
     assert "only https" in sb.web_fetch("http://insecure.example/")["error"]
-    assert "emerge-ai:" not in capsys.readouterr().err  # rejected fetch stays silent
+    assert "aimerge:" not in capsys.readouterr().err  # rejected fetch stays silent
     res = sb.web_fetch("https://example.org/news")
     assert res["content"] == "hello"
-    assert "emerge-ai: fetch: https://example.org/news" in capsys.readouterr().err
+    assert "aimerge: fetch: https://example.org/news" in capsys.readouterr().err
 
 
 def test_pretend_emerge_hypothesis(tmp_path, emerge_stub):

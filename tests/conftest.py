@@ -4,21 +4,21 @@ import sys
 
 import pytest
 
-from emerge_ai import overlay
+from aimerge import overlay
 
 
 @pytest.fixture(autouse=True)
 def _isolate_config(monkeypatch, tmp_path):
-    monkeypatch.setenv("EMERGE_AI_CONFIG", str(tmp_path / "emerge-ai.json"))
+    monkeypatch.setenv("AIMERGE_CONFIG", str(tmp_path / "aimerge.json"))
 
 
 @pytest.fixture(autouse=True)
 def _no_real_recovery(monkeypatch, tmp_path):
     """The plan phase now protects every mutation path; unit tests must never
     reach the real /var/lib. Explicit protect_fn= arguments still win."""
-    from emerge_ai import cli as cli_mod
-    from emerge_ai import journal as journal_mod
-    from emerge_ai.rollback import Protection
+    from aimerge import cli as cli_mod
+    from aimerge import journal as journal_mod
+    from aimerge.rollback import Protection
 
     monkeypatch.setattr(
         cli_mod, "_default_protect",

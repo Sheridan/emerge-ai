@@ -10,11 +10,11 @@
       строки через `tiers.package_of`, категория проверяется шаблоном
       `[A-Za-z0-9+._-]+`) и чистая `resolve_package_target(kind, line, *,
       etc_dir)`: каталог → `package.<kind>/<category>`, резерв
-      `package.<kind>/emerge-ai` при отсутствии категории, иначе
+      `package.<kind>/aimerge` при отсутствии категории, иначе
       `package.<kind>`. Проверка юнитами в `tests/test_config_edit.py`:
       каталог + `=dev-libs/jemalloc-5.4.0-r2 ~amd64` → `…/dev-libs`;
       `package.use`-файл → append в файл, каталог не создан; цели нет → создан
-      файл, не каталог; `*/* cuda` и `@world` → `…/emerge-ai`.
+      файл, не каталог; `*/* cuda` и `@world` → `…/aimerge`.
 - [x] 1.2 `apply_package_edit` пишет в результат разрешения и по-прежнему
       идемпотентен по дубль-проверке вызывающего; анонс активности (D1, spec:
       progress-logging) печатает фактический путь. Проверка: расширенный
@@ -38,7 +38,7 @@
       вызов → `[]`; обзор каталога `package.use` показывает строки всех его
       файлов с верной пометкой «аудит/не аудит».
 - [x] 2.2 Убедиться, что разрешение цели живёт только в `config_edit`:
-      `grep -rn 'package\.' src/emerge_ai | grep -v config_edit.py` не оставляет
+      `grep -rn 'package\.' src/aimerge | grep -v config_edit.py` не оставляет
       мест, где путь `package.<kind>` строится в обход разрешения (рекурсивная
       дубль-проверка в `cli._apply_action` — исключение, она уже обходит
       дерево). Результат — либо найденное место переведено на разрешение, либо
@@ -87,11 +87,11 @@
       `test_consent_degraded_repair_reresolve_then_merge` зелёный без правок
       ожиданий).
 - [x] 5.2 Docs: README (раздел про apply-канал и правки `/etc/portage`) —
-      правило «каталог → файл категории, резерв `emerge-ai`, отмена по
+      правило «каталог → файл категории, резерв `aimerge`, отмена по
       аудит-маркеру обходит каталоги»; запись в `LIVE_CHECKS.md` для ручной
       проверки на хосте с каталожной раскладкой: прогон с masked-находкой
       дописал `package.accept_keywords/<cat>`, файл `package.accept_keywords`
-      не появился, строка помечена `# emerge-ai:`, отмена по маркеру чистит
+      не появился, строка помечена `# aimerge:`, отмена по маркеру чистит
       только её.
 - [x] 5.3 Финальная проверка: `.venv/bin/python -m pytest -q` (unit, без
       маркера `integration`) зелёный; `ruff check src tests` и `mypy src`

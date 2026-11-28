@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from emerge_ai.config import Config
-from emerge_ai.llm import (
+from aimerge.config import Config
+from aimerge.llm import (
     LimitExhausted,
     LLMClient,
     LLMError,
@@ -15,9 +15,9 @@ from emerge_ai.llm import (
     run_tool_loop,
 )
 
-ENDPOINT = os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1")
+ENDPOINT = os.environ.get("AIMERGE_TEST_ENDPOINT", "http://127.0.0.1:8080/v1")
 MODEL = os.environ.get(
-    "EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"
+    "AIMERGE_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"
 )
 
 
@@ -226,7 +226,7 @@ class _StubHTTP(io.BytesIO):
 
 
 def _stub_urlopen(monkeypatch, capture, reply=None):
-    from emerge_ai import llm as llm_mod
+    from aimerge import llm as llm_mod
 
     reply_body = json.dumps(reply or {
         "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
@@ -251,8 +251,8 @@ def test_chat_announces_request_then_answer(monkeypatch):
     client.chat([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
                 tools=[{"type": "function"}])
     out = buf.getvalue()
-    assert "emerge-ai: sending request to LLM (model=m1, 2 messages, tools=1)" in out
-    assert "emerge-ai: LLM answered in " in out and "(finish=stop)" in out
+    assert "aimerge: sending request to LLM (model=m1, 2 messages, tools=1)" in out
+    assert "aimerge: LLM answered in " in out and "(finish=stop)" in out
     # order: announcement precedes the answer line
     assert out.index("sending request") < out.index("LLM answered")
 
@@ -265,7 +265,7 @@ def test_announcements_default_to_stderr(monkeypatch):
     buf = io.StringIO()
     monkeypatch.setattr(sys, "stderr", buf)
     LLMClient(Config(endpoint="http://x/v1")).chat([{"role": "user", "content": "u"}])
-    assert "emerge-ai: sending request to LLM" in buf.getvalue()
+    assert "aimerge: sending request to LLM" in buf.getvalue()
 
 
 def test_verbose_dumps_human_readable_request_masks_key(monkeypatch):
@@ -279,8 +279,8 @@ def test_verbose_dumps_human_readable_request_masks_key(monkeypatch):
     LLMClient(cfg, verbose=True, stream=buf).chat(msgs)
     out = buf.getvalue()
     # human-readable block: header line + one prefixed line per message
-    assert "emerge-ai: request: model=m" in out
-    assert "emerge-ai:   [1] system · 10 chars: sys prompt" in out
+    assert "aimerge: request: model=m" in out
+    assert "aimerge:   [1] system · 10 chars: sys prompt" in out
     assert "[capped," in out  # the 9 KB prompt field is capped with a marker
     # the JSON dump is gone: no `request payload:` line, no serialized body
     assert "request payload:" not in out and '"model": "m"' not in out
@@ -290,7 +290,7 @@ def test_verbose_dumps_human_readable_request_masks_key(monkeypatch):
     buf2 = io.StringIO()
     LLMClient(cfg, stream=buf2).chat(msgs)  # no -v: no dump lines at all
     out2 = buf2.getvalue()
-    assert "request:" not in out2 and "emerge-ai:   [" not in out2
+    assert "request:" not in out2 and "aimerge:   [" not in out2
     assert "secret-token-42" not in out2
 
 
@@ -302,7 +302,7 @@ def test_verbose_dump_plain_in_pipe(monkeypatch):
     LLMClient(Config(endpoint="http://x/v1"), verbose=True,
               stream=buf).chat([{"role": "user", "content": "u"}])
     out = buf.getvalue()
-    assert "emerge-ai:   [1] user" in out
+    assert "aimerge:   [1] user" in out
     assert "\x1b" not in out
 
 
@@ -318,7 +318,7 @@ def test_verbose_dump_lines_have_no_json_syntax(monkeypatch):
     LLMClient(Config(endpoint="http://x/v1"), verbose=True,
               stream=buf).chat(msgs)
     for line in buf.getvalue().splitlines():
-        if line.startswith("emerge-ai:   "):  # dump body lines only
+        if line.startswith("aimerge:   "):  # dump body lines only
             assert "{" not in line and "}" not in line and '\\"' not in line, line
 
 
@@ -326,7 +326,7 @@ def test_verbose_dump_lines_have_no_json_syntax(monkeypatch):
 
 
 def test_tool_loop_prints_each_reasoning_exactly_once(monkeypatch):
-    from emerge_ai import llm as llm_mod
+    from aimerge import llm as llm_mod
 
     def reply(reasoning, content="", with_tool_call=False):
         msg = {"content": content, "reasoning_content": reasoning}
@@ -423,7 +423,7 @@ def test_live_reasoning_visibility():
 
 # --- live streaming under -v (spec: llm-streaming) --------------------------
 
-from emerge_ai import llm as llm_mod  # noqa: E402  (section-local clarity)
+from aimerge import llm as llm_mod  # noqa: E402  (section-local clarity)
 
 
 class _StubSSE:
@@ -718,7 +718,7 @@ def test_stream_partial_line_not_glued_to_next_activity(monkeypatch):
     LLMClient(Config(endpoint="http://x/v1"), verbose=True,
               stream=buf).chat([{"role": "user", "content": "u"}])
     out = buf.getvalue()
-    assert "no trailing newline\nemerge-ai: LLM answered" in out
+    assert "no trailing newline\naimerge: LLM answered" in out
 
 
 def test_stream_duration_line_appends_usage_tokens(monkeypatch):

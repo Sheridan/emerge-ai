@@ -1,6 +1,6 @@
 import datetime
 
-from emerge_ai import config_edit, ladder, overlay
+from aimerge import config_edit, ladder, overlay
 from conftest import fake_ebuild
 
 TODAY = datetime.date(2026, 3, 1)
@@ -13,9 +13,9 @@ def test_package_edit_has_audit_comment(tmp_path):
         etc_dir=tmp_path, now=TODAY,
     )
     text = p.read_text()
-    assert "# emerge-ai: 2026-03-01 j-42 unblock after upstream fix" in text
+    assert "# aimerge: 2026-03-01 j-42 unblock after upstream fix" in text
     lines = config_edit.get_package_edit_lines("accept_keywords", etc_dir=tmp_path)
-    assert lines == [("=cat/pkg-1.0 ~amd64 # emerge-ai: 2026-03-01 j-42 unblock after upstream fix", True)]
+    assert lines == [("=cat/pkg-1.0 ~amd64 # aimerge: 2026-03-01 j-42 unblock after upstream fix", True)]
 
 
 def test_user_patch_lands_in_cat_pn_dir(tmp_path):
@@ -24,14 +24,14 @@ def test_user_patch_lands_in_cat_pn_dir(tmp_path):
         reason="fix -Werror", journal_id="j-7", patches_dir=tmp_path, now=TODAY,
     )
     assert path == tmp_path / "app-misc" / "foo" / "10-fix.diff"
-    assert path.read_text().startswith("# emerge-ai: 2026-03-01 j-7 fix -Werror")
+    assert path.read_text().startswith("# aimerge: 2026-03-01 j-7 fix -Werror")
 
 
 def test_overlay_add_registers_and_wins_priority(tmp_path, fake_ebuild_cmd):
     src = fake_ebuild(tmp_path)
     root = tmp_path / "overlay"
     conf = tmp_path / "repos.conf"
-    overlay.ensure_layout(root, conf, name="emerge-ai-test", priority=99, masters="gentoo")
+    overlay.ensure_layout(root, conf, name="aimerge-test", priority=99, masters="gentoo")
     entry = overlay.add_package(
         "cat/pkg-1.0", repo_root=root, source_dir=src,
         reason="missing dep", journal_id="j-1", ebuild_cmd=fake_ebuild_cmd,
@@ -42,7 +42,7 @@ def test_overlay_add_registers_and_wins_priority(tmp_path, fake_ebuild_cmd):
     reg = overlay.load_registry(root)
     assert reg["cat/pkg-1.0"]["journal_id"] == "j-1"
     assert reg["cat/pkg-1.0"]["reason"] == "missing dep"
-    conf_text = (conf / "emerge-ai-test.conf").read_text()
+    conf_text = (conf / "aimerge-test.conf").read_text()
     assert "priority = 99" in conf_text and f"location = {root}" in conf_text
     assert overlay.remove_package("cat/pkg-1.0", repo_root=root)
     assert overlay.load_registry(root) == {}

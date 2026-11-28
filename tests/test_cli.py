@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from emerge_ai import cli
-from emerge_ai.flags import Mode
+from aimerge import cli
+from aimerge.flags import Mode
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def test_version_gate_blocks_any_emerge_call(emerge_stub, monkeypatch, capsys, t
     assert rc == 4
     assert calls() == []
     err = capsys.readouterr().err
-    assert "3.1.0" in err and "emerge-ai" in err
+    assert "3.1.0" in err and "aimerge" in err
 
 
 def test_pretend_prints_verbatim_runs_once(emerge_stub, capsys, ok_compat, tmp_path):
@@ -127,7 +127,7 @@ def test_plan_failure_consults_agent(emerge_stub, ok_compat, monkeypatch, tmp_pa
     binary, calls = emerge_stub
     monkeypatch.setenv("EMERGE_STUB_RC", "1")
     monkeypatch.setenv("EMERGE_STUB_ERR", "slot conflict: dev-util/glslang")
-    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    (tmp_path / "aimerge.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
     seen = []
 
     def agent(incident):
@@ -176,7 +176,7 @@ def test_version_meta_flag_prints_and_skips_emerge(emerge_stub, ok_compat, capsy
         rc = cli.main([meta], emerge_binary=binary, runs_dir=str(tmp_path), plan_fn=lambda a, s: None)
         out = capsys.readouterr().out
         assert rc == 0
-        assert "emerge-ai" in out and "3.0.82.2" in out
+        assert "aimerge" in out and "3.0.82.2" in out
     assert calls() == []
 
 
@@ -203,7 +203,7 @@ def test_meta_flags_work_with_incompatible_portage(emerge_stub, monkeypatch, cap
     assert cli.main(["--help"], emerge_binary=binary, runs_dir=str(tmp_path)) == 0
     assert "--noninteractive" in capsys.readouterr().out
     assert cli.main(["-V"], emerge_binary=binary, runs_dir=str(tmp_path)) == 0
-    assert "emerge-ai" in capsys.readouterr().out
+    assert "aimerge" in capsys.readouterr().out
     assert calls() == []
 
 
@@ -236,16 +236,16 @@ def test_pretend_verbose_dumps_human_readable_request(emerge_stub, ok_compat, tm
     # spec: progress-logging — `-pv` shows the human-readable dump block in
     # stderr, never a serialized JSON payload; emerge's stdout stays untouched
     binary, calls = emerge_stub
-    from emerge_ai.plan import Plan, PlanEntry
+    from aimerge.plan import Plan, PlanEntry
 
     plan = Plan(entries=[PlanEntry("app-misc/x-1.0", 5, "hint")])
-    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    (tmp_path / "aimerge.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
     rc = cli.main(["--pretend", "-v", "app-misc/x"], emerge_binary=binary,
                   runs_dir=str(tmp_path / "runs1"), plan_fn=lambda a, s: plan)
     verbose = capsys.readouterr()
     assert rc == 0
-    assert "emerge-ai: request: model=" in verbose.err
-    assert "emerge-ai:   [" in verbose.err  # per-message dump lines, prefixed
+    assert "aimerge: request: model=" in verbose.err
+    assert "aimerge:   [" in verbose.err  # per-message dump lines, prefixed
     assert "request payload:" not in verbose.err
     assert '"model":' not in verbose.err  # no serialized JSON block
     assert "STUB-OUT line1" in verbose.out  # emerge passthrough intact
@@ -255,12 +255,12 @@ def test_pretend_verbose_dumps_human_readable_request(emerge_stub, ok_compat, tm
     plain = capsys.readouterr()
     assert rc2 == rc  # exit code unaffected by the dump
     assert plain.out == verbose.out  # stdout byte-for-byte the same
-    assert "emerge-ai:   [" not in plain.err
+    assert "aimerge:   [" not in plain.err
 
 
 def test_maybe_agent_gated_on_verbose(monkeypatch, tmp_path):
-    from emerge_ai import state
-    from emerge_ai.flags import Mode
+    from aimerge import state
+    from aimerge.flags import Mode
 
     captured = []
 
@@ -284,9 +284,9 @@ def test_maybe_agent_gated_on_verbose(monkeypatch, tmp_path):
 def test_maybe_agent_live_proposal_not_reprinted(monkeypatch, tmp_path, capsys):
     # spec: llm-streaming — a proposal shown live while streaming is not
     # printed a second time; the block keeps its header and a note instead
-    from emerge_ai import agent as agent_mod, state
-    from emerge_ai.agent import AgentResult
-    from emerge_ai.flags import Mode
+    from aimerge import agent as agent_mod, state
+    from aimerge.agent import AgentResult
+    from aimerge.flags import Mode
 
     shown = {"displayed": True}
 
@@ -321,9 +321,9 @@ def test_maybe_agent_live_proposal_not_reprinted(monkeypatch, tmp_path, capsys):
 def test_maybe_agent_system_prompt_carries_resolved_language(monkeypatch, tmp_path):
     # spec: config-prompts — the raw cfg value ("ru") must reach the agent
     # prompt as the normalized full name
-    from emerge_ai import state
-    from emerge_ai.flags import Mode
-    from emerge_ai.llm import Response
+    from aimerge import state
+    from aimerge.flags import Mode
+    from aimerge.llm import Response
 
     seen = []
 
@@ -364,7 +364,7 @@ class _PipeStdin:
 @pytest.fixture
 def agent_spy(tmp_path):
     """Endpoint configured; fake agent records (incident class, interactive flag)."""
-    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    (tmp_path / "aimerge.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
     seen: list = []
 
     def agent(incident, interactive=None):
@@ -435,7 +435,7 @@ def test_legacy_one_argument_agent_fn_still_works_and_never_reads_stdin(
     emerge_stub, ok_compat, monkeypatch, tmp_path, capsys
 ):
     binary, _ = emerge_stub
-    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    (tmp_path / "aimerge.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
     monkeypatch.setenv("EMERGE_STUB_RC", "1")
     monkeypatch.setattr(cli.sys, "stdin", _TTYStdin())
 
@@ -539,7 +539,7 @@ def test_meta_version_never_needs_systemd(tmp_path):
 
 def test_plain_world_doctor_stderr_stdout_clean(emerge_stub, ok_compat, tmp_path, capfd):
     """run-reporting «Обычный запуск без флагов»: doctor в stderr, stdout — только emerge."""
-    from emerge_ai.plan import Plan, PlanEntry
+    from aimerge.plan import Plan, PlanEntry
 
     binary, calls = emerge_stub
     rc = cli.main(
@@ -551,10 +551,10 @@ def test_plain_world_doctor_stderr_stdout_clean(emerge_stub, ok_compat, tmp_path
     assert rc == 0
     captured = capfd.readouterr()
     assert "STUB-OUT line1" in captured.out  # merge passthrough intact
-    assert "emerge-ai plan digest:" in captured.err  # enrichment lives on stderr
+    assert "aimerge plan digest:" in captured.err  # enrichment lives on stderr
     assert "critical subsystem" in captured.err  # doctor warning about the tier-1 entry
     assert captured.err.count("STUB-OUT") == 1  # only the plan-run stdout mirrored here; merge's stays in stdout
-    assert captured.err.index("STUB-OUT") < captured.err.index("emerge-ai plan digest:")  # order: emerge, then enrichment
+    assert captured.err.index("STUB-OUT") < captured.err.index("aimerge plan digest:")  # order: emerge, then enrichment
     assert calls() == [["-uDN", "@world", "--pretend"], ["-uDN", "@world"]]
 
 
@@ -598,7 +598,7 @@ def test_plan_falls_back_to_resolver_on_quiet_output(tmp_path, ok_compat):
 
     def plan_fn(args, svc):
         seen.append(list(args))
-        from emerge_ai.plan import Plan, PlanEntry
+        from aimerge.plan import Plan, PlanEntry
 
         return Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")])
 
@@ -609,7 +609,7 @@ def test_plan_falls_back_to_resolver_on_quiet_output(tmp_path, ok_compat):
 
 
 def _plan(tier):
-    from emerge_ai.plan import Plan, PlanEntry
+    from aimerge.plan import Plan, PlanEntry
 
     return Plan(entries=[PlanEntry("app-misc/foo-1.0", tier, "hint")])
 
@@ -659,7 +659,7 @@ def test_mutation_gate_no_plan_noninteractive_denied(tmp_path):
 
 
 def _rec(run_id="r1", kind="archive", path="/tmp/a/r1", created=100.0, **kw):
-    from emerge_ai.rollback import ProtectionRecord
+    from aimerge.rollback import ProtectionRecord
 
     return ProtectionRecord(
         run_id=run_id, created=created, kind=kind, path=path,
@@ -668,7 +668,7 @@ def _rec(run_id="r1", kind="archive", path="/tmp/a/r1", created=100.0, **kw):
 
 
 def test_rollback_mode_lists_confirms_and_restores(tmp_path, ok_compat, monkeypatch, capfd):
-    from emerge_ai.rollback import ProtectionRecord  # noqa: F401
+    from aimerge.rollback import ProtectionRecord  # noqa: F401
 
     monkeypatch.setattr(builtins, "input", lambda p="": "y")
     seen = []
@@ -739,15 +739,15 @@ def test_rollback_mode_snapshot_case_prints_offline_instructions(tmp_path, ok_co
 
 
 def _consent_endpoint(tmp_path):
-    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    (tmp_path / "aimerge.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
 
 
 def test_consent_channel_answers_with_response_object(emerge_stub, ok_compat, monkeypatch,
                                                       tmp_path, capsys):
     """The live crash was a dict-shaped read on a Response; the dialogue now
     reads every answer shape and the comment reaches the operator."""
-    from emerge_ai.llm import Response
-    from emerge_ai.plan import Plan, PlanEntry
+    from aimerge.llm import Response
+    from aimerge.plan import Plan, PlanEntry
 
     class AnsweringClient:
         def __init__(self, cfg, **kw):

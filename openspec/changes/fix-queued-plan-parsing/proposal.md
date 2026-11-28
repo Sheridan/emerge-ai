@@ -39,9 +39,9 @@
 
 ## Impact
 
-- Код: `src/emerge_ai/digest.py` (regex), `src/emerge_ai/plan.py` (`build_plan`,
-  `_iter_installed_tasks`), `src/emerge_ai/portage_compat.py` (seam списка merge),
-  `src/emerge_ai/consent.py` (рендер пункта merge при недоступном плане).
+- Код: `src/aimerge/digest.py` (regex), `src/aimerge/plan.py` (`build_plan`,
+  `_iter_installed_tasks`), `src/aimerge/portage_compat.py` (seam списка merge),
+  `src/aimerge/consent.py` (рендер пункта merge при недоступном плане).
 - Тесты: `tests/test_digest.py`, `tests/test_plan.py`, `tests/test_portage_compat.py`,
   `tests/test_consent.py`; секция живой проверки в `LIVE_CHECKS.md`.
 - Поведение: меню consent и контракт точки восстановления начинают показывать реальное

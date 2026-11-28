@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from emerge_ai import cli, gate, journal, state
-from emerge_ai.plan import Plan, PlanEntry
-from emerge_ai.rollback import Protection
+from aimerge import cli, gate, journal, state
+from aimerge.plan import Plan, PlanEntry
+from aimerge.rollback import Protection
 
 pytestmark = pytest.mark.integration
 
@@ -37,8 +37,8 @@ def e2e_env(tmp_path, emerge_stub, ok_compat, monkeypatch):
     monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "0")
     cfg = tmp_path / "cfg.json"
     cfg.write_text(json.dumps({
-        "endpoint": os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
-        "model": os.environ.get("EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
+        "endpoint": os.environ.get("AIMERGE_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
+        "model": os.environ.get("AIMERGE_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
         "show_digest": False,
     }))
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
@@ -122,8 +122,8 @@ def test_repair_ladder_journals_then_finds_precedent(repair_stub, ok_compat, mon
     monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: Popen is not allowed")
     cfg = tmp_path / "cfg.json"
     cfg.write_text(json.dumps({
-        "endpoint": os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
-        "model": os.environ.get("EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
+        "endpoint": os.environ.get("AIMERGE_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
+        "model": os.environ.get("AIMERGE_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
         "show_digest": False,
     }))
     monkeypatch.setattr(cli.portage_compat, "portage_version", lambda: "3.0.82.2")
@@ -135,7 +135,7 @@ def test_repair_ladder_journals_then_finds_precedent(repair_stub, ok_compat, mon
         """Настоящий strata + запись промптов: прецедент обязан дойти до модели."""
 
         def __init__(self, cfg_, verbose=False):
-            from emerge_ai.llm import LLMClient
+            from aimerge.llm import LLMClient
             self._real = LLMClient(cfg_, verbose=verbose)
 
         def chat(self, messages, tools=None, temperature=0.2):

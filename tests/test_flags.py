@@ -1,5 +1,5 @@
-from emerge_ai.flags import OWN_FLAGS, OWN_FLAG_HELP, Mode, parse_own_flags
-from emerge_ai.runner import drop_flags, flag_present
+from aimerge.flags import OWN_FLAGS, OWN_FLAG_HELP, Mode, parse_own_flags
+from aimerge.runner import drop_flags, flag_present
 
 ASK = ("-a", "--ask")
 PRETEND = ("-p", "--pretend")
@@ -91,7 +91,7 @@ def test_every_flag_mentioned_in_text_is_recognised():
     import inspect
     import re
 
-    from emerge_ai import gate
+    from aimerge import gate
 
     for flag in set(re.findall(r"--i-understand[\w-]*", inspect.getsource(gate))):
         assert flag in OWN_FLAGS, f"gate.py hints at unknown flag {flag}"

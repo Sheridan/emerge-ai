@@ -2,24 +2,24 @@
 
 ## Purpose
 
-Определяет установку emerge-ai средствами Gentoo package manager: содержимое и зависимости
+Определяет установку aimerge средствами Gentoo package manager: содержимое и зависимости
 пакета из ebuild, discoverability prompt-правил после установки, изоляцию сборочной фазы и
 post-install инструктаж администратора.
 
 ## Requirements
 
 ### Requirement: Установка пакета через portage
-emerge-ai SHALL быть устанавливаем как `app-portage/emerge-ai` из ebuild, поставляемого в
-каталоге `packaging/app-portage/emerge-ai/` репозитория проекта и размещаемого пользователем
+aimerge SHALL быть устанавливаем как `app-portage/aimerge` из ebuild, поставляемого в
+каталоге `packaging/app-portage/aimerge/` репозитория проекта и размещаемого пользователем
 в личном оверлее; исходники пакета SHALL быть доступны для анонимного fetch (без SSH-ключей).
 
 #### Scenario: Штатная установка
-- **WHEN** пользователь добавил ebuild в личный оверлей, принял live-версию и выполнил `emerge app-portage/emerge-ai`
-- **THEN** установка завершается кодом 0, бинарь `emerge-ai` появляется в PATH
+- **WHEN** пользователь добавил ebuild в личный оверлей, принял live-версию и выполнил `emerge app-portage/aimerge`
+- **THEN** установка завершается кодом 0, бинарь `aimerge` появляется в PATH
 
 #### Scenario: Проверка версии после установки
-- **WHEN** сразу после установки выполнить `emerge-ai --version`
-- **THEN** печатается версия emerge-ai рядом с версией portage и код выхода 0
+- **WHEN** сразу после установки выполнить `aimerge --version`
+- **THEN** печатается версия aimerge рядом с версией portage и код выхода 0
 
 #### Scenario: Fetch без учётных данных
 - **WHEN** portage скачивает исходники пакета на машине без SSH-доступа к GitHub
@@ -31,16 +31,16 @@ emerge-ai SHALL быть устанавливаем как `app-portage/emerge-a
 SHALL браться из checkout.
 
 #### Scenario: Запуск вне checkout
-- **WHEN** установленный emerge-ai запущен из произвольной директории без `EMERGE_AI_PROMPTS_DIR`
+- **WHEN** установленный aimerge запущен из произвольной директории без `AIMERGE_PROMPTS_DIR`
 - **THEN** агент получает полный набор prompt-правил и работает
 
 #### Scenario: Dev-раскладка не сломана
-- **WHEN** emerge-ai запущен из checkout репозитория (есть `./prompts/`)
+- **WHEN** aimerge запущен из checkout репозитория (есть `./prompts/`)
 - **THEN** правила читаются из checkout, поведение разработки не меняется
 
 #### Scenario: Правила отсутствуют
 - **WHEN** правила не найдены ни в одном из разрешённых расположений
-- **THEN** emerge-ai завершается с явной ошибкой, называющей проверенные директории
+- **THEN** aimerge завершается с явной ошибкой, называющей проверенные директории
 
 ### Requirement: Рантайм-зависимости пакета
 Пакет SHALL объявлять рантайм-зависимости, достаточные для работы CLI на чистой системе:
@@ -53,7 +53,7 @@ portage (бинарь `emerge` и importable python-модуль `portage`) и `
 
 #### Scenario: Отсутствие опциональных инструментов
 - **WHEN** на системе нет btrfs-progs / genlop / git
-- **THEN** установка пакета и запуск `emerge-ai --version` не зависят от этого
+- **THEN** установка пакета и запуск `aimerge --version` не зависят от этого
 
 ### Requirement: Изоляция сборочной фазы от живого хоста
 Сборка пакета SHALL запускать только unit-тесты (без интеграционного маркера), не требующие
@@ -66,22 +66,22 @@ portage (бинарь `emerge` и importable python-модуль `portage`) и `
 
 ### Requirement: Дефолтный конфиг при установке
 Пакет SHALL поставлять шаблон конфига и размещать его как
-`/usr/share/emerge-ai/emerge-ai.json.default`; если `/etc/portage/emerge-ai.json`
+`/usr/share/aimerge/aimerge.json.default`; если `/etc/portage/aimerge.json`
 отсутствует, установка SHALL создать его из шаблона с правами 0600 root:root.
 Существующий конфиг пользователя изменяться при установке или обновлении НЕ SHALL.
 
 #### Scenario: Первая установка
-- **WHEN** `/etc/portage/emerge-ai.json` на системе отсутствовал и установка завершилась успешно
-- **THEN** файл создан с правами 0600, `emerge-ai --version` работает сразу,
+- **WHEN** `/etc/portage/aimerge.json` на системе отсутствовал и установка завершилась успешно
+- **THEN** файл создан с правами 0600, `aimerge --version` работает сразу,
   а LLM-вызов при пустом `endpoint` падает с явным сообщением настроить конфиг
 
 #### Scenario: Обновление поверх пользовательского конфига
-- **WHEN** пользователь отредактировал `/etc/portage/emerge-ai.json` и выполняется reinstall/update
+- **WHEN** пользователь отредактировал `/etc/portage/aimerge.json` и выполняется reinstall/update
 - **THEN** файл пользователя остаётся неизменным
 
 ### Requirement: Post-install инструктаж
 После установки пакет SHALL вывести краткое руководство: расположение и права конфига
-`/etc/portage/emerge-ai.json` (0600, обязательный `endpoint`), собственные флаги и
+`/etc/portage/aimerge.json` (0600, обязательный `endpoint`), собственные флаги и
 необязательные инструменты для снапшотов/оценок/дайджестов.
 
 #### Scenario: Сообщение post-install

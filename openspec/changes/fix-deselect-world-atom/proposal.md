@@ -71,17 +71,17 @@ file...` с **кодом выхода 0** — прогон записал бы �
 
 ## Impact
 
-- `src/emerge_ai/triage.py`: `candidates()` — разрешение атома deselect из
+- `src/aimerge/triage.py`: `candidates()` — разрешение атома deselect из
   `world` (одна запись → вариант, N записей → N вариантов, ноль → advice как
   сейчас); тексты и `atom` строятся из найденной строки world.
-- `src/emerge_ai/whitelist.py`: `ATOM_RE`/`_validate_atom` — отсев CPV и
+- `src/aimerge/whitelist.py`: `ATOM_RE`/`_validate_atom` — отсев CPV и
   версионных форм без оператора, членство = точное совпадение со строкой world;
   `execute()` — post-check перечитыванием world, статус `no-effect` + аудит.
-- `src/emerge_ai/consent.py`: `menu_specs(..., exclude=...)` — не предлагать
+- `src/aimerge/consent.py`: `menu_specs(..., exclude=...)` — не предлагать
   варианты, уже исполненные без эффекта; заголовок/`undo` из дословного атома.
-- `src/emerge_ai/agent.py`: `_finding_variants` наследует то же разрешение (ключи
+- `src/aimerge/agent.py`: `_finding_variants` наследует то же разрешение (ключи
   и actions общего источника остаются идентичными меню).
-- `src/emerge_ai/cli.py`: `_consent_execute` (`cli.py:1077-1086`) учитывает
+- `src/aimerge/cli.py`: `_consent_execute` (`cli.py:1077-1086`) учитывает
   `status == "no-effect"` — не журналирует как починку, печатает честное
   сообщение, помечает ключ варианта в no-effect множество прогона.
 - Тесты: `tests/test_whitelist.py` (`:44-46`, `:67-68`, `:85-88` закрепляют

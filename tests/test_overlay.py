@@ -9,7 +9,7 @@ import hashlib
 
 import pytest
 
-from emerge_ai import overlay
+from aimerge import overlay
 
 from conftest import fake_ebuild
 
@@ -80,7 +80,7 @@ def test_add_package_ebuild_failure_keeps_registry_clean(tmp_path):
 
 
 def test_add_package_fallback_writes_manifest_locally(tmp_path):
-    # ebuild_cmd=None means NO external command (there is no EMERGE_AI_EBUILD
+    # ebuild_cmd=None means NO external command (there is no AIMERGE_EBUILD
     # fallback anywhere) — write_manifest runs in-process
     src = fake_ebuild(tmp_path)
     root = tmp_path / "overlay"

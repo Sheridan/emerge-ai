@@ -22,7 +22,7 @@
   создаётся). Существующая раскладка хоста никогда не переписывается.
 - Детерминированный резерв, когда категория из строки не выводится (wildcard
   `*/*`, set-атом `@world`, вообще не-атом): строка идёт в зарезервированный
-  файл `emerge-ai` внутри того же каталога — append с аудит-маркером, ничего
+  файл `aimerge` внутри того же каталога — append с аудит-маркером, ничего
   не затирается. Никогда не пишется «файл вместо каталога» и вне `/etc/portage`.
 - Обход каталогов для отмены и обзора: `remove_by_run` и
   `get_package_edit_lines` рекурсивно читают файлы внутри `package.*`-каталогов;
@@ -31,7 +31,7 @@
 - Показ цели оператору: detail-строка consent-формулировки и строка активности
   называют фактический путь (`package.accept_keywords/dev-libs`), а не только
   вид правки, — до и после исполнения видно одно и то же место.
-- Неизменно: append + аудит-комментарий `# emerge-ai: <дата> <run-id> <reason>`,
+- Неизменно: append + аудит-комментарий `# aimerge: <дата> <run-id> <reason>`,
   единственная точка мутации через apply-канал, идемпотентность по дубль-проверке.
 
 ## Capabilities
@@ -50,10 +50,10 @@
 
 ## Impact
 
-- `src/emerge_ai/config_edit.py`: новая чистая функция разрешения цели
+- `src/aimerge/config_edit.py`: новая чистая функция разрешения цели
   (`resolve_package_target`) + разбор категории из атома; `apply_package_edit`,
   `remove_by_run`, `get_package_edit_lines`, `undo_text` — поверх неё.
-- `src/emerge_ai/consent.py`, `src/emerge_ai/cli.py`: проброс `etc_dir` в
+- `src/aimerge/consent.py`, `src/aimerge/cli.py`: проброс `etc_dir` в
   `consent.menu_specs`, чтобы detail/undo-строки называли реальный файл.
 - Тесты: `tests/test_config_edit.py` (каталог/файл/резерв/отмена в каталоге),
   `tests/test_consent.py` (формулировка с путём),

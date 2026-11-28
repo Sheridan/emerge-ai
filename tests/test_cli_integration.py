@@ -7,10 +7,10 @@ import sys
 
 import pytest
 
-from emerge_ai import cli, llm, state
-from emerge_ai.flags import Mode
-from emerge_ai.plan import Plan, PlanEntry
-from emerge_ai.rollback import Protection
+from aimerge import cli, llm, state
+from aimerge.flags import Mode
+from aimerge.plan import Plan, PlanEntry
+from aimerge.rollback import Protection
 
 
 @pytest.fixture(autouse=True)
@@ -289,7 +289,7 @@ def test_agent_limit_exhaustion_is_not_unavailable(emerge_stub, ok_compat, monke
                                                    tmp_path, capsys):
     """M13: исчерпание лимита — не сбой эндпоинта: ни «agent unavailable»,
     ни изменения исходного кода завершения emerge."""
-    from emerge_ai.llm import LimitExhausted
+    from aimerge.llm import LimitExhausted
 
     binary, calls = emerge_stub
     monkeypatch.setenv("EMERGE_STUB_ERR", "sandbox: write access denied: /usr/share/x")
@@ -327,10 +327,10 @@ def test_agent_limit_noninteractive_cli_audits_and_never_asks(emerge_stub, ok_co
     rules = tmp_path / "rules"
     rules.mkdir()
     (rules / "core.md").write_text("Be terse.")
-    monkeypatch.setenv("EMERGE_AI_PROMPTS_DIR", str(rules))
+    monkeypatch.setenv("AIMERGE_PROMPTS_DIR", str(rules))
     monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
     audit_file = tmp_path / "decisions.log"
-    monkeypatch.setattr("emerge_ai.agent.gate_mod.AUDIT_PATH", str(audit_file))
+    monkeypatch.setattr("aimerge.agent.gate_mod.AUDIT_PATH", str(audit_file))
     monkeypatch.setattr(builtins, "input", lambda p="": pytest.fail("must not ask"))
     cfg = tmp_path / "cfg.json"
     cfg.write_text('{"endpoint": "http://127.0.0.1:9/v1", "model": "m"}')
@@ -340,7 +340,7 @@ def test_agent_limit_noninteractive_cli_audits_and_never_asks(emerge_stub, ok_co
             pass
 
         def chat(self, messages, tools=None, temperature=0.2):
-            from emerge_ai.llm import Response
+            from aimerge.llm import Response
             return Response(content="half an idea", finish_reason="length")
 
         def render(self, resp, stream=None):
@@ -439,7 +439,7 @@ def test_status_messages_plain_under_capturing(emerge_stub, ok_compat, tmp_path,
     )
     assert rc == 0
     err = capsys.readouterr().err
-    assert "no incomplete emerge-ai run" in err and "\x1b" not in err
+    assert "no incomplete aimerge run" in err and "\x1b" not in err
 
 
 def test_agent_error_red_on_tty_stderr(emerge_stub, ok_compat, monkeypatch, tmp_path):
@@ -466,7 +466,7 @@ def test_agent_error_red_on_tty_stderr(emerge_stub, ok_compat, monkeypatch, tmp_
     )
     assert rc == 1
     err = tty.getvalue()
-    assert "\x1b[31memerge-ai: no LLM endpoint configured" in err
+    assert "\x1b[31maimerge: no LLM endpoint configured" in err
     assert "\x1b[0m" in err
 
 
@@ -491,7 +491,7 @@ class AskWhenOfferedClient:
         self.chats = 0
 
     def chat(self, messages, tools=None, temperature=0.2):
-        from emerge_ai.llm import Response, ToolCall
+        from aimerge.llm import Response, ToolCall
 
         self.tools = [t["function"]["name"] for t in (tools or [])]
         if not self.chats:
@@ -516,16 +516,16 @@ class AskWhenOfferedClient:
 @pytest.fixture
 def agent_path(monkeypatch, tmp_path):
     """Real IncidentAgent on a scripted client, no portage/rules lookup, failing plan."""
-    from emerge_ai import prompts
+    from aimerge import prompts
 
     rules = tmp_path / "rules"
     rules.mkdir()
     (rules / "core.md").write_text("Be terse.")
-    monkeypatch.setenv("EMERGE_AI_PROMPTS_DIR", str(rules))
+    monkeypatch.setenv("AIMERGE_PROMPTS_DIR", str(rules))
     monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
     scripted = AskWhenOfferedClient()
     monkeypatch.setattr(cli, "LLMClient", lambda cfg, **kw: scripted)
-    (tmp_path / "emerge-ai.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
+    (tmp_path / "aimerge.json").write_text('{"endpoint": "http://127.0.0.1:9/v1"}')
     monkeypatch.setenv("EMERGE_STUB_PRETEND_RC", "1")
     monkeypatch.setenv("EMERGE_STUB_ERR", "slot conflict: dev-util/glslang")
     return scripted
@@ -626,7 +626,7 @@ def test_plan_digest_llm_plain_text_reply_is_dropped(emerge_stub, ok_compat, mon
     binary, _ = emerge_stub
     cfg = tmp_path / "cfg.json"
     cfg.write_text(json.dumps({"endpoint": "http://localhost:1/v1"}))
-    monkeypatch.setenv("EMERGE_AI_CONFIG", str(cfg))
+    monkeypatch.setenv("AIMERGE_CONFIG", str(cfg))
     monkeypatch.setattr(cli.LLMClient, "chat",
                         lambda self, messages, **kw: llm.Response("The plan looks fine."),
                         raising=True)
@@ -653,7 +653,7 @@ def test_pretend_degraded_without_endpoint_deterministic_only(emerge_stub, ok_co
         "Total: 0 packages\n"))
     cfg = tmp_path / "cfg.json"
     cfg.write_text("{}")
-    monkeypatch.setenv("EMERGE_AI_CONFIG", str(cfg))
+    monkeypatch.setenv("AIMERGE_CONFIG", str(cfg))
 
     def no_client(cfg, verbose=False):
         raise AssertionError("LLMClient must not be built without endpoint")
@@ -724,7 +724,7 @@ def test_ask_degraded_plan_reports_before_merge(emerge_stub, ok_compat, monkeypa
     captured = capsys.readouterr()
     out = captured.out  # -a shows plan material on stdout
     assert "plan DEGRADED despite exit code 0" in out
-    assert "not executable by emerge-ai yet" in out
+    assert "not executable by aimerge yet" in out
     assert any("Proceed?" in p for p in asked)  # consent question unchanged
     # the merge really ran: one call without any pretend flag
     assert any(not any(a in ("--pretend", "-p") for a in c) for c in calls())
@@ -738,7 +738,7 @@ def test_pretend_clean_plan_single_llm_call_and_no_agent(emerge_stub, ok_compat,
     cfg.write_text(json.dumps({"endpoint": "http://localhost:1/v1", "model": "m"}))
     monkeypatch.setattr(cli, "LLMClient", _JsonDigestClient)
     _JsonDigestClient.n = 0
-    from emerge_ai import agent as agent_mod
+    from aimerge import agent as agent_mod
     monkeypatch.setattr(agent_mod, "IncidentAgent",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no agent for a clean plan")))
     rc = cli.main(["-p", "app-misc/foo", "--no-color"], emerge_binary=binary,
@@ -846,7 +846,7 @@ def test_post_run_changelog_on_saves_report(emerge_stub, ok_compat, monkeypatch,
                   plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "hint")]))
     assert rc == 0
     err = capsys.readouterr().err
-    assert "emerge-ai changelog digest:" in err and "OpenSSL upgrade needed" in err
+    assert "aimerge changelog digest:" in err and "OpenSSL upgrade needed" in err
     assert state.latest_incomplete(runs_dir=runs) is None  # run completed; report saved anyway
     saved = [state.load_run(p.stem, runs_dir=runs) for p in runs.glob("*.json")]
     assert any(r.changelog and "OpenSSL" in r.changelog for r in saved)
@@ -866,7 +866,7 @@ def test_verbose_reaches_post_run_changelog_client(emerge_stub, ok_compat, monke
 
         def chat(self, messages, **kw):
             if self.verbose:
-                print("emerge-ai: request: model=m temperature=0.2 messages=1 "
+                print("aimerge: request: model=m temperature=0.2 messages=1 "
                       "tools=0 body=2 chars", file=sys.stderr)
             return type("R", (), {"content": "- OpenSSL upgrade needed"})()
 
@@ -935,7 +935,7 @@ def test_ask_pretend_records_plan_and_never_merges(emerge_stub, ok_compat, monke
     """cli-compat «Связка -a -p не устанавливает»: план сохраняется, merge нет."""
     import builtins
 
-    from emerge_ai.plan import Plan, PlanEntry
+    from aimerge.plan import Plan, PlanEntry
 
     binary, calls = emerge_stub
     monkeypatch.setattr(builtins, "input", lambda prompt="": pytest.fail("stdin read"))
@@ -947,7 +947,7 @@ def test_ask_pretend_records_plan_and_never_merges(emerge_stub, ok_compat, monke
     assert rc == 0
     assert calls() == [["-p", "app-misc/foo"]]  # single resolve, no merge run
     out = capsys.readouterr()
-    assert "Proceed?" not in out.err and "emerge-ai plan digest:" in out.out
+    assert "Proceed?" not in out.err and "aimerge plan digest:" in out.out
     saved = [state.load_run(p.stem, runs_dir=runs) for p in runs.glob("*.json")]
     assert any(r.plan and r.plan[0]["cpv"] == "app-misc/foo-1.0" for r in saved)
 
@@ -1135,9 +1135,9 @@ def test_merge_failure_offer_declined_keeps_artifacts(emerge_stub, ok_compat, mo
 def test_merge_failure_noninteractive_hints_without_restoring():
     """Seam-тест: noninteractive без флага — только подсказка, артефакты целы.
     (Через main этот случай недостижим: гейт автономности не пустит tier≤4 merge.)"""
-    from emerge_ai.cli import _offer_rollback
-    from emerge_ai.flags import Mode
-    from emerge_ai.state import RunState
+    from aimerge.cli import _offer_rollback
+    from aimerge.flags import Mode
+    from aimerge.state import RunState
 
     restored = []
     run = RunState(run_id="r")
@@ -1169,12 +1169,12 @@ def test_merge_failure_rest_tier_has_no_offer(emerge_stub, ok_compat, monkeypatc
 
 def _repair_agent(monkeypatch, tmp_path):
     """Endpoint + скриптованный клиент + правила: _maybe_agent даёт proposal."""
-    (tmp_path / "emerge-ai.json").write_text(
+    (tmp_path / "aimerge.json").write_text(
         '{"endpoint": "http://127.0.0.1:9/v1", "model": "m"}')
     rules = tmp_path / "rules"
     rules.mkdir()
     (rules / "core.md").write_text("Be terse.")
-    monkeypatch.setenv("EMERGE_AI_PROMPTS_DIR", str(rules))
+    monkeypatch.setenv("AIMERGE_PROMPTS_DIR", str(rules))
     monkeypatch.setattr(cli.portage_compat, "emerge_info", lambda: "")
 
     class ProposalClient:
@@ -1182,7 +1182,7 @@ def _repair_agent(monkeypatch, tmp_path):
             pass
 
         def chat(self, messages, tools=None, temperature=0.2):
-            from emerge_ai.llm import Response
+            from aimerge.llm import Response
             return Response(content="PROPOSAL: a plain retry should clear it")
 
         def render(self, resp, stream=None):
@@ -1438,7 +1438,7 @@ def test_apply_action_unknown_type_fail_closed(tmp_path):
 
 
 def test_typed_variants_whitelist_by_class():
-    from emerge_ai.agent import typed_variants
+    from aimerge.agent import typed_variants
 
     plain = typed_variants({"class": "unknown", "argv": ["=sys-apps/x-1"]}, arch="amd64")
     assert [v["key"] for v in plain] == ["retry"]
@@ -1502,7 +1502,7 @@ def test_plain_interactive_abort_changes_nothing(emerge_stub, ok_compat, monkeyp
     assert calls() and all(any(a in ("--pretend", "-p") for a in c) for c in calls())
     err = capsys.readouterr().err
     assert "operator aborted; nothing changed" in err
-    assert "emerge-ai --resume" in err  # survive-the-session hint (task 2.4)
+    assert "aimerge --resume" in err  # survive-the-session hint (task 2.4)
     saved = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert saved["state"] != "DONE"  # resumable, not finished
 
@@ -1591,7 +1591,7 @@ def test_consent_repair_writes_the_category_file(ok_compat, monkeypatch, tmp_pat
     assert rc == 0
     assert ak.is_dir()  # the directory was never replaced by a file
     written = (ak / "app-container").read_text()
-    assert written.startswith("=app-container/edk2-bin-2024 ~amd64 # emerge-ai: ")
+    assert written.startswith("=app-container/edk2-bin-2024 ~amd64 # aimerge: ")
     assert len(written.splitlines()) == 1
     assert (ak / "sys-apps").read_text() == "sys-apps/user ** # theirs\n"  # neighbour intact
     err = capsys.readouterr().err
@@ -1716,7 +1716,7 @@ def test_consent_degraded_emaint_world_fix_executes(ok_compat, monkeypatch,
     """emaint --fix world as a consent menu command (tasks 5.x): world backup
     first, fixed argv, pre-execution audit line, repair journaled, clean
     re-plan follows."""
-    from emerge_ai import gate as gate_mod, whitelist
+    from aimerge import gate as gate_mod, whitelist
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -1745,7 +1745,7 @@ def test_consent_degraded_emaint_world_fix_executes(ok_compat, monkeypatch,
                   input_fn=lambda prompt="": next(answers))
     assert rc == 0
     assert elog.read_text().strip() == "--fix world"  # fixed argv, nothing else
-    backups = list(tmp_path.glob("world.emerge-ai.*.bak"))
+    backups = list(tmp_path.glob("world.aimerge.*.bak"))
     assert backups and "app-misc/foo" in backups[0].read_text()
 
     audit = [json.loads(ln) for ln in
@@ -1766,7 +1766,7 @@ def test_noninteractive_never_executes_world_fix_command(ok_compat, monkeypatch,
                                                          tmp_path, capsys):
     """The new actions obey the autonomy matrix: question-free runs keep them
     at advice — emaint is never executed without an operator."""
-    from emerge_ai import whitelist
+    from aimerge import whitelist
 
     binary, calls, fixfile = _flip_stub(tmp_path, monkeypatch, WORLD_STUB_ERR)
     world = tmp_path / "world"
@@ -1782,7 +1782,7 @@ def test_noninteractive_never_executes_world_fix_command(ok_compat, monkeypatch,
                   input_fn=no_input)
     assert rc == 0
     assert not fixfile.exists()  # the (stub) world fix never ran
-    assert not list(tmp_path.glob("world.emerge-ai.*.bak"))  # nor its backup
+    assert not list(tmp_path.glob("world.aimerge.*.bak"))  # nor its backup
     saved = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert saved.get("consent_repairs", []) == []
 
@@ -1792,8 +1792,8 @@ def test_deselect_no_effect_never_reoffered(emerge_stub, ok_compat, monkeypatch,
     """spec: repair-actions / design D4 — a deselect that ran without effect
     (portage exits 0 even on 'No matching atoms found in "world"') must not
     come back as an executable item and must not be counted as a repair."""
-    from emerge_ai import gate as gate_mod
-    from emerge_ai import portage_compat, whitelist
+    from aimerge import gate as gate_mod
+    from aimerge import portage_compat, whitelist
 
     binary, _log, _fix = _flip_stub(tmp_path, monkeypatch,
                                     "!!! dev-libs/jemalloc-5.4.0-r2 conflicts with app-misc/foo-1.0\n")
@@ -1831,8 +1831,8 @@ def test_deselect_effective_is_counted_as_repair(emerge_stub, ok_compat, monkeyp
                                                  tmp_path, capsys):
     """The honest positive path: when the line really leaves the world file,
     the run counts the repair (no no-effect wording anywhere)."""
-    from emerge_ai import gate as gate_mod
-    from emerge_ai import portage_compat, whitelist
+    from aimerge import gate as gate_mod
+    from aimerge import portage_compat, whitelist
 
     binary, _log, _fix = _flip_stub(tmp_path, monkeypatch,
                                     "!!! dev-libs/jemalloc-5.4.0-r2 conflicts with app-misc/foo-1.0\n")
@@ -1928,7 +1928,7 @@ def test_mutation_report_carries_llm_news_digest(emerge_stub, ok_compat, monkeyp
     cfg = tmp_path / "cfg.json"
     cfg.write_text(json.dumps({"endpoint": "http://endpoint.invalid/v1",
                                "model": "m"}))
-    monkeypatch.setenv("EMERGE_AI_CONFIG", str(cfg))
+    monkeypatch.setenv("AIMERGE_CONFIG", str(cfg))
 
     seen = []
 
@@ -1964,7 +1964,7 @@ def test_changelog_digest_gets_resolved_language(emerge_stub, ok_compat, monkeyp
 
     def capture(**kw):
         seen.update(kw)
-        return "emerge-ai changelog digest (raw):\n- none"
+        return "aimerge changelog digest (raw):\n- none"
 
     monkeypatch.setattr(cli.changelog, "collect_digest", capture)
     rc = cli.main(["--noninteractive", "--i-understand-the-risks", "-a", "app-misc/foo"],
@@ -1992,7 +1992,7 @@ def test_verbose_shows_reasoning_of_post_run_clients(emerge_stub, ok_compat, mon
     import io
     import json
 
-    from emerge_ai import llm as llm_mod
+    from aimerge import llm as llm_mod
 
     binary, _ = emerge_stub
     cfg = _changelog_cfg(tmp_path, changelog_digest=True, endpoint="http://localhost:1/v1")

@@ -41,9 +41,9 @@
 
 ## Impact
 
-- Код: `src/emerge_ai/consent.py` (промпт/канал/разбор), `src/emerge_ai/cli.py`
+- Код: `src/aimerge/consent.py` (промпт/канал/разбор), `src/aimerge/cli.py`
   (`consent_analyze`: состояние истории, `Response`, широкая деградация), возможно
-  `src/emerge_ai/llm.py` (переиспользование `run_tool_loop` без правок).
+  `src/aimerge/llm.py` (переиспользование `run_tool_loop` без правок).
 - Тесты: `tests/test_consent.py`, `tests/test_cli.py`; секция живой проверки в `LIVE_CHECKS.md`.
 - Поведение: ответы модели в consent-раунде становятся содержательными и помнят контекст;
   latency канала растёт (инструментальные раунды) — осознанная цена цели проекта.

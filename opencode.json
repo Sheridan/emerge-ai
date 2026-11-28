@@ -14,14 +14,16 @@
     "external_directory": {
       "*": "deny",
       "/tmp/**": "allow",
-      "/var/db/repos/emerge-ai-test/**": "allow",
-      "/etc/portage/repos.conf/emerge-ai*": "allow"
+      "/var/db/repos/aimerge-test/**": "allow",
+      "/etc/portage/repos.conf/aimerge*": "allow"
     },
     "bash": {
       "*": "allow",
       "sudo *": "allow",
       "emerge *": "deny",
       "sudo emerge *": "deny",
+      "aimerge *": "deny",
+      "sudo aimerge *": "deny",
       "ebuild *": "deny",
       "sudo ebuild *": "deny",
       "etc-update *": "deny",
@@ -71,14 +73,28 @@
       "sudo emerge --pretend *": "allow",
       "sudo emerge --info": "allow",
       "sudo emerge --info *": "allow",
+      "aimerge --version": "allow",
+      "aimerge -p": "allow",
+      "aimerge -p *": "allow",
+      "aimerge --pretend": "allow",
+      "aimerge --pretend *": "allow",
+      "aimerge --info": "allow",
+      "aimerge --info *": "allow",
+      "sudo aimerge --version": "allow",
+      "sudo aimerge -p": "allow",
+      "sudo aimerge -p *": "allow",
+      "sudo aimerge --pretend": "allow",
+      "sudo aimerge --pretend *": "allow",
+      "sudo aimerge --info": "allow",
+      "sudo aimerge --info *": "allow",
       "ebuild * manifest": "allow",
       "sudo ebuild * manifest": "allow",
       "btrfs subvolume list *": "allow",
       "btrfs subvolume show *": "allow",
       "sudo btrfs subvolume list *": "allow",
       "sudo btrfs subvolume show *": "allow",
-      "rm * /var/db/repos/emerge-ai-test*": "allow",
-      "sudo rm * /var/db/repos/emerge-ai-test*": "allow"
+      "rm * /var/db/repos/aimerge-test*": "allow",
+      "sudo rm * /var/db/repos/aimerge-test*": "allow"
     }
   }
 }

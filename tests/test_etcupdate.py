@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from emerge_ai import etcupdate
-from emerge_ai.cli import _etc_flow
+from aimerge import etcupdate
+from aimerge.cli import _etc_flow
 
 FIX = Path("tests/fixtures/etc")
 
@@ -99,9 +99,9 @@ def test_apply_atomic_backup_confirm_override(tmp_path):
     assert cur.read_text() == "OLD\n" and new.exists()
     res = etcupdate.apply_decision(str(new), d, confirm_fn=lambda p: True)
     assert res["applied"] and cur.read_text() == "NEW\n"
-    assert (tmp_path / "sshd_config.pre-emerge-ai").read_text() == "OLD\n"
+    assert (tmp_path / "sshd_config.pre-aimerge").read_text() == "OLD\n"
     assert not new.exists()
-    assert not list(tmp_path.glob(".emerge-ai-*"))
+    assert not list(tmp_path.glob(".aimerge-*"))
 
 
 def test_pending_for_finds_newest_cfg(tmp_path):
@@ -123,7 +123,7 @@ def test_apply_file_is_the_plan_phase_entry(tmp_path):
     res = etcupdate.apply_file(str(new), {"action": "take-new", "reason": "r"},
                                current_path=str(cur))
     assert res["applied"] and cur.read_text() == "NEW\n"
-    assert (tmp_path / "foo.conf.pre-emerge-ai").read_text() == "OLD\n"
+    assert (tmp_path / "foo.conf.pre-aimerge").read_text() == "OLD\n"
 
 
 def test_apply_file_for_original_no_pending_is_honest(tmp_path):
@@ -236,7 +236,7 @@ def _package_use_dir(tmp_path):
 
 def _web_flaky(monkeypatch, result):
     """Patch Sandbox.web_fetch; returns the list of requested URLs."""
-    from emerge_ai import sandbox as sandbox_mod
+    from aimerge import sandbox as sandbox_mod
 
     urls = []
 
@@ -254,7 +254,7 @@ KEEP = {"action": "keep-current", "reason": "r", "citations": ["d"]}
 def _isolate_doc_roots(monkeypatch):
     """Local doc scan hits the real host (/usr/share/doc) — empty it so web
     context is the only variable in these tests."""
-    from emerge_ai import cli as cli_mod
+    from aimerge import cli as cli_mod
 
     real = cli_mod.etcupdate.collect_docs
     monkeypatch.setattr(cli_mod.etcupdate, "collect_docs",
@@ -324,7 +324,7 @@ def test_etc_flow_language_reaches_llm(tmp_path, capsys):
 
 def test_etc_flow_web_access_off_never_fetches(tmp_path, capsys, monkeypatch):
     cfg, etc = _cfg_dir(tmp_path, web_flag=False)
-    from emerge_ai import sandbox as sandbox_mod
+    from aimerge import sandbox as sandbox_mod
 
     monkeypatch.setattr(sandbox_mod.Sandbox, "web_fetch",
                         lambda self, url: pytest.fail("must not fetch"))
@@ -337,13 +337,13 @@ def test_etc_flow_web_access_off_never_fetches(tmp_path, capsys, monkeypatch):
 
 @pytest.mark.integration
 def test_etc_live_replay_sshd_fixture():
-    from emerge_ai.config import Config
-    from emerge_ai.llm import LLMClient
+    from aimerge.config import Config
+    from aimerge.llm import LLMClient
 
     cfg = Config(
-        endpoint=os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
-        model=os.environ.get("EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
-        api_key=os.environ.get("EMERGE_AI_TEST_API_KEY"),
+        endpoint=os.environ.get("AIMERGE_TEST_ENDPOINT", "http://127.0.0.1:8080/v1"),
+        model=os.environ.get("AIMERGE_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"),
+        api_key=os.environ.get("AIMERGE_TEST_API_KEY"),
     )
     docs = [("tests/fixtures/etc/sshd_config.5.txt", (FIX / "sshd_config.5.txt").read_text())]
     last = None

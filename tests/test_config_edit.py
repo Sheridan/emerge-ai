@@ -7,17 +7,17 @@ import datetime
 
 import pytest
 
-from emerge_ai import config_edit
+from aimerge import config_edit
 
 D = datetime.date(2026, 11, 24)
 
 
 def test_audit_comment_format():
     assert config_edit.audit_comment("abc123", "unmask for build", D) == (
-        "# emerge-ai: 2026-11-24 abc123 unmask for build"
+        "# aimerge: 2026-11-24 abc123 unmask for build"
     )
     assert config_edit.audit_comment("", "no journal", D) == (
-        "# emerge-ai: 2026-11-24 - no journal"
+        "# aimerge: 2026-11-24 - no journal"
     )
 
 
@@ -29,7 +29,7 @@ def test_apply_package_edit_appends_one_line(tmp_path, kind):
     )
     assert target == tmp_path / f"package.{kind}"
     assert target.read_text() == (
-        "dev-libs/foo static-libs # emerge-ai: 2026-11-24 j1 needs static\n"
+        "dev-libs/foo static-libs # aimerge: 2026-11-24 j1 needs static\n"
     )
 
 
@@ -64,14 +64,14 @@ def test_get_package_edit_lines(tmp_path):
     (tmp_path / "package.use").write_text(
         "\n"
         "dev-libs/old ssl   # user inline note\n"
-        "# emerge-ai: 2026-01-01 j0 old audit header\n"
-        "dev-libs/new xml # emerge-ai: 2026-01-01 j1 inline audit\n"
+        "# aimerge: 2026-01-01 j0 old audit header\n"
+        "dev-libs/new xml # aimerge: 2026-01-01 j1 inline audit\n"
         "app-misc/plain flag\n"
     )
     lines = config_edit.get_package_edit_lines("use", etc_dir=tmp_path)
     assert ("dev-libs/old ssl   # user inline note", False) in lines
-    assert ("# emerge-ai: 2026-01-01 j0 old audit header", True) in lines
-    assert ("dev-libs/new xml # emerge-ai: 2026-01-01 j1 inline audit", True) in lines
+    assert ("# aimerge: 2026-01-01 j0 old audit header", True) in lines
+    assert ("dev-libs/new xml # aimerge: 2026-01-01 j1 inline audit", True) in lines
     assert ("app-misc/plain flag", False) in lines
     assert len(lines) == 4  # blank line skipped
 
@@ -85,9 +85,9 @@ def test_apply_user_patch_path_and_header(tmp_path):
         "app-editors", "vim", "--- a\n+++ b\n@@\n", reason="sandbox fix",
         journal_id="j9", patches_dir=tmp_path / "patches", now=D,
     )
-    assert path == tmp_path / "patches" / "app-editors" / "vim" / "10-emerge-ai-fix.diff"
+    assert path == tmp_path / "patches" / "app-editors" / "vim" / "10-aimerge-fix.diff"
     first, rest = path.read_text().split("\n", 1)
-    assert first == "# emerge-ai: 2026-11-24 j9 sandbox fix"
+    assert first == "# aimerge: 2026-11-24 j9 sandbox fix"
     assert rest == "--- a\n+++ b\n@@\n"
 
 
@@ -96,7 +96,7 @@ def test_apply_user_patch_same_name_overwrites(tmp_path):
     config_edit.apply_user_patch("cat", "pn", "old\n", name="50-x", **args)
     config_edit.apply_user_patch("cat", "pn", "new\n", name="50-x", **args)
     assert (tmp_path / "cat" / "pn" / "50-x.diff").read_text() == (
-        "# emerge-ai: 2026-11-24 - r\nnew\n"
+        "# aimerge: 2026-11-24 - r\nnew\n"
     )
 
 
@@ -117,7 +117,7 @@ def test_remove_by_run_deletes_only_that_run(tmp_path):
     config_edit.apply_package_edit("use", "e/f nls", reason="other",
                                    journal_id="run99", etc_dir=tmp_path, now=D)
     (tmp_path / "package.use").write_text(
-        "c/d static # emerge-ai: 2026-11-24 run77 r2\nuser/line keep me\n")
+        "c/d static # aimerge: 2026-11-24 run77 r2\nuser/line keep me\n")
 
     touched = config_edit.remove_by_run("run77", etc_dir=tmp_path)
     assert {p.name for p in touched} == {"package.accept_keywords", "package.use"}
@@ -134,11 +134,11 @@ def test_writes_are_announced(tmp_path, capsys):
     config_edit.apply_package_edit(
         "use", "dev-libs/foo static-libs", reason="needs static", journal_id="j1",
         etc_dir=tmp_path, now=D)
-    assert (f"emerge-ai: editing {tmp_path}/package.use: + dev-libs/foo static-libs"
+    assert (f"aimerge: editing {tmp_path}/package.use: + dev-libs/foo static-libs"
             in capsys.readouterr().err)
     path = config_edit.apply_user_patch("dev-libs", "foo", "--- a\n+++ b\n",
                                         reason="patch", patches_dir=tmp_path, now=D)
-    assert f"emerge-ai: writing patch {path}" in capsys.readouterr().err
+    assert f"aimerge: writing patch {path}" in capsys.readouterr().err
 
 
 # --- directory layout (spec: repair-actions, design D1/D3) -------------------
@@ -183,7 +183,7 @@ def test_apply_package_edit_into_category_directory(tmp_path):
         "accept_keywords", AK, reason="masked dep", journal_id="j1", etc_dir=tmp_path, now=D)
     assert target == ak / "dev-libs"
     assert target.read_text() == (
-        "=dev-libs/jemalloc-5.4.0-r2 ~amd64 # emerge-ai: 2026-11-24 j1 masked dep\n")
+        "=dev-libs/jemalloc-5.4.0-r2 ~amd64 # aimerge: 2026-11-24 j1 masked dep\n")
     assert (ak / "app-misc").read_text() == "app-misc/user ** # theirs\n"  # untouched
     assert ak.is_dir()  # the directory was never replaced by a file
 
@@ -203,7 +203,7 @@ def test_directory_write_is_announced_with_its_path(tmp_path, capsys):
     (tmp_path / "package.accept_keywords").mkdir()
     config_edit.apply_package_edit("accept_keywords", AK, reason="masked dep",
                                    journal_id="j1", etc_dir=tmp_path, now=D)
-    assert (f"emerge-ai: editing {tmp_path}/package.accept_keywords/dev-libs: + {AK}"
+    assert (f"aimerge: editing {tmp_path}/package.accept_keywords/dev-libs: + {AK}"
             in capsys.readouterr().err)
 
 
@@ -240,7 +240,7 @@ def test_remove_by_run_reaches_into_category_directories(tmp_path):
     dev.parent.mkdir()
     dev.write_text(
         "dev-libs/user ** keep me\n"
-        "=dev-libs/jemalloc-5.4.0-r2 ~amd64 # emerge-ai: 2026-11-24 run77 masked dep\n")
+        "=dev-libs/jemalloc-5.4.0-r2 ~amd64 # aimerge: 2026-11-24 run77 masked dep\n")
     assert config_edit.remove_by_run("run99", etc_dir=tmp_path) == []  # another run
     touched = config_edit.remove_by_run("run77", etc_dir=tmp_path)
     assert touched == [dev]
@@ -252,7 +252,7 @@ def test_remove_by_run_reaches_into_category_directories(tmp_path):
 def test_remove_by_run_empties_a_whole_nested_file(tmp_path):
     deep = tmp_path / "package.use" / "dev-libs" / "foo"
     deep.parent.mkdir(parents=True)
-    deep.write_text("dev-libs/foo x # emerge-ai: 2026-11-24 run5 r\n")
+    deep.write_text("dev-libs/foo x # aimerge: 2026-11-24 run5 r\n")
     assert config_edit.remove_by_run("run5", etc_dir=tmp_path) == [deep]
     assert deep.exists() and not deep.read_text().strip()
 
@@ -262,12 +262,12 @@ def test_get_package_edit_lines_reads_a_directory_target(tmp_path):
     (use / "dev-libs").mkdir(parents=True)
     (use / "app-misc").write_text("app-misc/a x\n")
     (use / "dev-libs" / "foo").write_text(
-        "dev-libs/foo y # emerge-ai: 2026-11-24 j1 inline\n")
-    (use / "notes").write_text("# emerge-ai: 2026-01-01 j0 header\n")
+        "dev-libs/foo y # aimerge: 2026-11-24 j1 inline\n")
+    (use / "notes").write_text("# aimerge: 2026-01-01 j0 header\n")
     lines = config_edit.get_package_edit_lines("use", etc_dir=tmp_path)
     assert ("app-misc/a x", False) in lines
-    assert ("dev-libs/foo y # emerge-ai: 2026-11-24 j1 inline", True) in lines
-    assert ("# emerge-ai: 2026-01-01 j0 header", True) in lines
+    assert ("dev-libs/foo y # aimerge: 2026-11-24 j1 inline", True) in lines
+    assert ("# aimerge: 2026-01-01 j0 header", True) in lines
     assert config_edit.get_package_edit_lines("mask", etc_dir=tmp_path) == []
 
 
@@ -292,7 +292,7 @@ def test_package_files_stays_inside_the_package_prefix(tmp_path):
 def test_undo_text_names_the_category_file(tmp_path):
     (tmp_path / "package.accept_keywords").mkdir()
     assert config_edit.undo_text("accept_keywords", line=AK, etc_dir=tmp_path) == (
-        "remove the run's lines (audit marker '# emerge-ai:') from "
+        "remove the run's lines (audit marker '# aimerge:') from "
         "package.accept_keywords/dev-libs")
     # a file-layout host (and a call without a line) keeps the per-kind wording
     assert config_edit.undo_text("accept_keywords", line=AK, etc_dir=tmp_path / "empty") == (
@@ -326,9 +326,9 @@ def test_license_edit_writes_the_readable_file(tmp_path, capsys):
     got = config_edit.apply_package_edit("accept_license", line, reason="licence",
                                          journal_id="j1", etc_dir=tmp_path, now=D)
     assert got == tmp_path / "package.license"
-    assert got.read_text() == f"{line} # emerge-ai: 2026-11-24 j1 licence\n"
+    assert got.read_text() == f"{line} # aimerge: 2026-11-24 j1 licence\n"
     assert not (tmp_path / "package.accept_license").exists()
-    assert (f"emerge-ai: editing {tmp_path}/package.license: + {line}"
+    assert (f"aimerge: editing {tmp_path}/package.license: + {line}"
             in capsys.readouterr().err)
 
 
@@ -346,7 +346,7 @@ def test_license_channel_honours_the_directory_layout(tmp_path):
     assert got == lic / "app-misc"  # the layout rule applies to this name as well
     assert (lic / "app-misc").read_text() == (
         "app-misc/user *FOO\n"
-        "app-misc/foo *NEEDED # emerge-ai: 2026-11-24 j1 licence\n")
+        "app-misc/foo *NEEDED # aimerge: 2026-11-24 j1 licence\n")
     assert lic.is_dir()  # the directory was never replaced by a file
     assert not (tmp_path / "package.accept_license").exists()
 
@@ -359,7 +359,7 @@ def test_license_lines_are_reviewed_and_undone_under_that_name(tmp_path):
                                    reason="licence", journal_id="run7", etc_dir=tmp_path, now=D)
     got = config_edit.get_package_edit_lines("accept_license", etc_dir=tmp_path)
     assert ("dev-libs/user *FOO", False) in got
-    assert ("dev-libs/foo *NEEDED # emerge-ai: 2026-11-24 run7 licence", True) in got
+    assert ("dev-libs/foo *NEEDED # aimerge: 2026-11-24 run7 licence", True) in got
     assert config_edit.get_package_edit_lines("use", etc_dir=tmp_path) == []
     touched = config_edit.remove_by_run("run7", etc_dir=tmp_path)
     assert touched == [lic / "dev-libs"]

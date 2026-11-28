@@ -1,10 +1,10 @@
 import json
 
-from emerge_ai import cli
-from emerge_ai.agent import IncidentAgent
-from emerge_ai.journal import finalize, find, fingerprint, normalize_error
-from emerge_ai.plan import Plan, PlanEntry
-from emerge_ai.sandbox import Sandbox
+from aimerge import cli
+from aimerge.agent import IncidentAgent
+from aimerge.journal import finalize, find, fingerprint, normalize_error
+from aimerge.plan import Plan, PlanEntry
+from aimerge.sandbox import Sandbox
 from test_agent import ScriptedClient, incident
 from test_cli_integration import _repair_agent
 
@@ -81,7 +81,7 @@ def test_repaired_run_writes_exactly_one_entry(repair_stub, monkeypatch, tmp_pat
     assert entry["solution"] == "repeat the failed emerge unchanged"
     assert entry["actions"] == ["retry"]
     assert "exited rc=0" in entry["verified_by"]
-    run_file = next(f for f in (tmp_path).glob("*.json") if f.name != "emerge-ai.json")
+    run_file = next(f for f in (tmp_path).glob("*.json") if f.name != "aimerge.json")
     assert entry["run_id"] == run_file.stem
     inc = json.loads(run_file.read_text())["incident"]
     assert entry["class"] == inc["class"] == "sandbox"

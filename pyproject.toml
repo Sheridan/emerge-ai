@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "emerge-ai"
+name = "aimerge"
 description = "AI-assisted emerge wrapper for Gentoo (version-locked to sys-apps/portage)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,10 +11,10 @@ license = { text = "GPL-3.0-or-later" }
 dynamic = ["version"]
 
 [project.scripts]
-emerge-ai = "emerge_ai.cli:main"
+aimerge = "aimerge.cli:main"
 
 [tool.setuptools.dynamic]
-version = { attr = "emerge_ai.__version__" }
+version = { attr = "aimerge.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

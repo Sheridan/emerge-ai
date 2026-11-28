@@ -3,13 +3,13 @@ import os
 
 import pytest
 
-from emerge_ai.config import Config
-from emerge_ai import prompts
-from emerge_ai.llm import LLMClient
+from aimerge.config import Config
+from aimerge import prompts
+from aimerge.llm import LLMClient
 
-ENDPOINT = os.environ.get("EMERGE_AI_TEST_ENDPOINT", "http://127.0.0.1:8080/v1")
+ENDPOINT = os.environ.get("AIMERGE_TEST_ENDPOINT", "http://127.0.0.1:8080/v1")
 MODEL = os.environ.get(
-    "EMERGE_AI_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"
+    "AIMERGE_TEST_MODEL", "qwen3.8-flash-next-unsloth-ud-q5_k_xl"
 )
 
 

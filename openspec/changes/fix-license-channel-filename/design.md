@@ -71,7 +71,7 @@
 
 `resolve_package_target("accept_license", line, etc_dir)` после D1 работает с
 `package.license` как с любым другим именем: каталог → файл категории по
-категории атома, резерв `package.license/emerge-ai`, недоступная цель →
+категории атома, резерв `package.license/aimerge`, недоступная цель →
 `ChannelError`. Исключений в коде разрешения не появляется — проверка юнитом на
 tmp-корне с каталогом `package.license`.
 

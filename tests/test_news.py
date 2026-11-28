@@ -1,9 +1,9 @@
-"""News digest (spec: repair-actions, design D5) — emerge-ai reads the news
+"""News digest (spec: repair-actions, design D5) — aimerge reads the news
 itself; the operator never gets a manual-reading pointer."""
 
 import pytest
 
-from emerge_ai import news
+from aimerge import news
 
 LISTING = (
     " [1: 1 of 3 ] GLSA 202611-01 [2026-11-20] (unread)\n"

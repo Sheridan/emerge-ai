@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from emerge_ai import changelog
+from aimerge import changelog
 
 
 def test_change_system_requires_plain_text():

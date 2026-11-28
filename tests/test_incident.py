@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from emerge_ai.incident import build_incident, classify, extract_cpv, extract_phase
+from aimerge.incident import build_incident, classify, extract_cpv, extract_phase
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

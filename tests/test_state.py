@@ -1,7 +1,7 @@
 import pytest
 
-from emerge_ai.flags import Mode
-from emerge_ai.state import (
+from aimerge.flags import Mode
+from aimerge.state import (
     INCIDENT,
     MERGE,
     PLAN,
@@ -61,6 +61,6 @@ def test_changelog_field_defaults_none_for_old_reports(tmp_path):
     data.pop("changelog", None)  # simulate a report written before the field existed
     path.write_text(json.dumps(data))
     assert load_run(run.run_id, runs_dir=tmp_path).changelog is None
-    run.changelog = "emerge-ai changelog digest:\n- x"
+    run.changelog = "aimerge changelog digest:\n- x"
     save_run(run, runs_dir=tmp_path)
-    assert load_run(run.run_id, runs_dir=tmp_path).changelog.startswith("emerge-ai changelog")
+    assert load_run(run.run_id, runs_dir=tmp_path).changelog.startswith("aimerge changelog")

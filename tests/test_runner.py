@@ -3,8 +3,8 @@ import stat
 
 import pytest
 
-from emerge_ai.digest import parse_installed
-from emerge_ai.runner import run_emerge_capturing, with_color_flag
+from aimerge.digest import parse_installed
+from aimerge.runner import run_emerge_capturing, with_color_flag
 
 
 class TTY(io.StringIO):
@@ -82,7 +82,7 @@ def test_captured_replacement_survives_run_report(tmp_path, capsys):
     # json.dumps with ensure_ascii=False) without an encoding error
     import json
 
-    from emerge_ai import state
+    from aimerge import state
 
     _, buf = run_emerge_capturing(["-p", "app-misc/bad"], emerge_binary=str(_byte_stub(tmp_path)))
     capsys.readouterr()
@@ -132,12 +132,12 @@ def test_streams_routed_to_matching_streams(tmp_path, capfd):
     captured = capfd.readouterr()
     # our stdout carries ONLY emerge's stdout, byte-for-byte with ANSI (D: spec)
     assert captured.out == "\x1b[32mOUT-ONE\x1b[0m\nOUT-TWO\n"
-    # our stderr is emerge's stderr byte-for-byte, plus emerge-ai's own
+    # our stderr is emerge's stderr byte-for-byte, plus aimerge's own
     # progress-logging line for the launch (spec: progress-logging)
     lines = captured.err.splitlines(keepends=True)
-    announced = [l for l in lines if l.startswith("emerge-ai: ")]
-    assert announced == [f"emerge-ai: running: {tmp_path}/emerge -p app-misc/split\n"]
-    assert "".join(l for l in lines if not l.startswith("emerge-ai: ")) == (
+    announced = [l for l in lines if l.startswith("aimerge: ")]
+    assert announced == [f"aimerge: running: {tmp_path}/emerge -p app-misc/split\n"]
+    assert "".join(l for l in lines if not l.startswith("aimerge: ")) == (
         "\x1b[33mERR-ONE\x1b[0m\nERR-TWO\n"
     )
     # merged ANSI-stripped buffer feeds incident/enrich
@@ -166,7 +166,7 @@ def test_large_output_both_streams_no_deadlock(tmp_path, capfd):
 
 
 def test_reader_thread_error_propagates(tmp_path, capfd, monkeypatch):
-    from emerge_ai import ui as runner_ui
+    from aimerge import ui as runner_ui
 
     calls = []
     real = runner_ui.strip_ansi
@@ -190,6 +190,6 @@ def test_launch_announced_on_stderr_never_on_stdout(tmp_path, capfd):
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     rc, _ = run_emerge_capturing(["-av", "app-misc/foo"], emerge_binary=str(path))
     captured = capfd.readouterr()
-    assert f"emerge-ai: running: {path} -av app-misc/foo\n" in captured.err
+    assert f"aimerge: running: {path} -av app-misc/foo\n" in captured.err
     assert captured.out == RAW
-    assert "emerge-ai:" not in captured.out
+    assert "aimerge:" not in captured.out

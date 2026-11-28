@@ -1,11 +1,11 @@
 """Deterministic plan-phase triage (spec: plan-triage) on live-shaped output:
-the fixtures below mirror a real `emerge-ai @world -uDN --keep-going -av` run
+the fixtures below mirror a real `aimerge @world -uDN --keep-going -av` run
 (rc 0, edk2/qemu conflict, yazi skipped via the masked jemalloc, world-file
 problem, IMPORTANT config line, Total: 0 packages)."""
 
 import io
 
-from emerge_ai import triage
+from aimerge import triage
 
 
 class TTY(io.StringIO):
@@ -117,9 +117,9 @@ def test_slice_keeps_problems_and_total_excludes_use_sheets():
 
 def test_slice_cap_banner_points_at_the_artifact():
     text = LIVE_DEGRADED * 40
-    s = triage.build_slice(text, cap_bytes=600, path="/var/lib/emerge-ai/runs/r1/plan-output.txt")
+    s = triage.build_slice(text, cap_bytes=600, path="/var/lib/aimerge/runs/r1/plan-output.txt")
     assert len(s.encode("utf-8")) <= 600
-    assert s.endswith("[capped; полный текст: /var/lib/emerge-ai/runs/r1/plan-output.txt]")
+    assert s.endswith("[capped; полный текст: /var/lib/aimerge/runs/r1/plan-output.txt]")
 
 
 def test_slice_overlapping_windows_are_merged_once():
@@ -227,7 +227,7 @@ def test_render_report_advisory_only_no_questions():
     assert "plan DEGRADED despite exit code 0" in report
     assert "=dev-libs/jemalloc-5.4.0-r2 ~amd64" in report
     assert "executed when the run is not --pretend" in report
-    assert "not executable by emerge-ai yet" in report
+    assert "not executable by aimerge yet" in report
     assert "/runs/r1/plan-output.txt" in report
     assert "?" not in report  # advisory: zero questions
 
@@ -287,7 +287,7 @@ def test_plan_incident_references_full_text_without_truncation():
 
 
 def test_incident_classification_plan_degraded_only_at_rc_zero():
-    from emerge_ai.incident import build_incident
+    from aimerge.incident import build_incident
 
     inc = build_incident(0, LIVE_DEGRADED, UPDATE_ARGV, log_path="/runs/r1/plan-output.txt")
     assert inc["class"] == "plan-degraded"

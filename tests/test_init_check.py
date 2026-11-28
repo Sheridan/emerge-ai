@@ -1,6 +1,6 @@
 """init_check probes are fully injected — no dependence on the test host."""
 
-from emerge_ai import init_check
+from aimerge import init_check
 
 
 def test_marker_present_is_systemd():

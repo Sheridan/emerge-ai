@@ -1,5 +1,5 @@
-from emerge_ai.plan import Plan, PlanEntry, build_plan
-from emerge_ai.tiers import TierService
+from aimerge.plan import Plan, PlanEntry, build_plan
+from aimerge.tiers import TierService
 
 
 class FakePackage:
@@ -61,7 +61,7 @@ def test_plan_fixture_distribution(tmp_path):
 
 
 def test_plan_system_membership(tmp_path):
-    from emerge_ai.llm import Response
+    from aimerge.llm import Response
 
     class CapturingClient:
         def __init__(self):
@@ -104,7 +104,7 @@ def _svc(tmp_path):
 
 
 def test_build_plan_from_output_matches_resolver(tmp_path):
-    from emerge_ai.plan import build_plan_from_output
+    from aimerge.plan import build_plan_from_output
 
     resolver_plan = build_plan(["x"], _svc(tmp_path), parse_opts=FakeParseOpts(),
                                load_config=FakeConfigLoader(), resolve=FakeResolve())
@@ -116,7 +116,7 @@ def test_build_plan_from_output_matches_resolver(tmp_path):
 
 
 def test_build_plan_from_output_dedups_keeps_first(tmp_path):
-    from emerge_ai.plan import build_plan_from_output
+    from aimerge.plan import build_plan_from_output
 
     out = PRETEND + "[ebuild   R    ] sys-libs/glibc-2.42::gentoo  again\n"
     plan = build_plan_from_output(out, ["x"], _svc(tmp_path), fallback=lambda a, s: None)
@@ -124,7 +124,7 @@ def test_build_plan_from_output_dedups_keeps_first(tmp_path):
 
 
 def test_build_plan_from_output_falls_back_on_unparseable(tmp_path):
-    from emerge_ai.plan import build_plan_from_output
+    from aimerge.plan import build_plan_from_output
 
     calls = []
 
@@ -169,7 +169,7 @@ Total: 3 packages, in 1 segment
 
 
 def test_build_plan_from_output_counts_masked_status_flags(tmp_path):
-    from emerge_ai.plan import build_plan_from_output
+    from aimerge.plan import build_plan_from_output
 
     plan = build_plan_from_output(PRETEND_MASKED, ["-uDN", "@world"], _svc(tmp_path),
                                   fallback=lambda a, s: None)

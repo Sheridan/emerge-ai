@@ -2,8 +2,8 @@
 
 import pytest
 
-from emerge_ai import portage_compat as pc
-from emerge_ai.compat import check_version_compat
+from aimerge import portage_compat as pc
+from aimerge.compat import check_version_compat
 
 
 @pytest.fixture(scope="module")

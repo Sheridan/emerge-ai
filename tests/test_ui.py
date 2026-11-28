@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from emerge_ai import ui
+from aimerge import ui
 
 
 class TTY(io.StringIO):
@@ -96,18 +96,18 @@ def test_resolve_palette_none_is_quiet_defaults():
 
 
 def test_message_helpers_color_on_tty():
-    assert ui.err("bad", stream=TTY()) == "\x1b[31memerge-ai: bad\x1b[0m"
-    assert ui.warn("meh", stream=TTY()) == "\x1b[33memerge-ai: meh\x1b[0m"
-    assert ui.ok("fine", stream=TTY()) == "\x1b[32memerge-ai: fine\x1b[0m"
-    assert ui.info("note", stream=TTY()) == "emerge-ai: note"
+    assert ui.err("bad", stream=TTY()) == "\x1b[31maimerge: bad\x1b[0m"
+    assert ui.warn("meh", stream=TTY()) == "\x1b[33maimerge: meh\x1b[0m"
+    assert ui.ok("fine", stream=TTY()) == "\x1b[32maimerge: fine\x1b[0m"
+    assert ui.info("note", stream=TTY()) == "aimerge: note"
     assert ui.prompt("Proceed? [y/N] ", stream=TTY()) == "\x1b[1;33mProceed? [y/N] \x1b[0m"
 
 
 def test_message_helpers_plain_on_pipe():
     pipe = io.StringIO()
-    assert ui.err("bad", stream=pipe) == "emerge-ai: bad"
-    assert ui.warn("meh", stream=pipe) == "emerge-ai: meh"
-    assert ui.ok("fine", stream=pipe) == "emerge-ai: fine"
+    assert ui.err("bad", stream=pipe) == "aimerge: bad"
+    assert ui.warn("meh", stream=pipe) == "aimerge: meh"
+    assert ui.ok("fine", stream=pipe) == "aimerge: fine"
     assert ui.prompt("Proceed? ", stream=pipe) == "Proceed? "
 
 
@@ -115,10 +115,10 @@ def test_activity_is_plain_info_style_even_on_tty(monkeypatch):
     # spec: progress-logging — activity lines follow console-output info style:
     # no color accent, identical text on TTY, pipe, NO_COLOR
     monkeypatch.delenv("NO_COLOR", raising=False)
-    assert ui.activity("running: emerge -p x", stream=TTY()) == "emerge-ai: running: emerge -p x"
+    assert ui.activity("running: emerge -p x", stream=TTY()) == "aimerge: running: emerge -p x"
     assert "\x1b" not in ui.activity("m", stream=TTY())
     monkeypatch.setenv("NO_COLOR", "1")
-    assert ui.activity("m", stream=TTY()) == "emerge-ai: m"
+    assert ui.activity("m", stream=TTY()) == "aimerge: m"
 
 
 def test_clip_caps_with_marker():
