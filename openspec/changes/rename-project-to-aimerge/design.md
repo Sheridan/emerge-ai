@@ -138,6 +138,20 @@ allow-список повторяет ровно исключения живог
 переписывается в задаче 5.3. Проверка 5.3 формулируется через `portageq`, иначе
 она проверяет не то.
 
+**D11. `git push` — обязательная фаза, и она идёт до merge на хосте.** `9999`-ebuild
+на `git-r3` собирает **удалённую** ветку по умолчанию, а не рабочее дерево: пока
+переименование не запушено, merge физически не может увидеть ни `packaging/aimerge.json.default`,
+ни `name = "aimerge"`. Первичный план этого шага не содержал (группа 6 с `gh repo rename`
+стояла после merge), и хост честно на этом упал: сборка со старым деревом дала
+`emerge_ai-3.0.82-py3-none-any.whl`, а `doins "${S}/packaging/aimerge.json.default"`
+в фазе install — `FileNotFoundError`. Порядок поэтому: push → merge → смоук,
+а `gh repo rename` безопасен и до push, потому что GitHub держит редирект и
+`EGIT_REPO_URI` продолжает резолвиться на тот же коммит.
+
+**D12. Проверка «переименование видно снаружи»** — отдельная контрольная точка после push:
+`gh api repos/Sheridan/aimerge/contents/packaging` показывает `aimerge.json.default`.
+Локальный grep-ноль этого не доказывает: он описывает другое дерево.
+
 ## Risks / Trade-offs
 
 - [Наивная замена задевает доменные токены → `AttributeError` на
@@ -210,6 +224,10 @@ allow-список повторяет ровно исключения живог
                  оверлей: babylon_5/app-portage/emerge-ai -> aimerge, ebuild + Manifest
                  repos.conf: emerge-ai-test{,-base}.conf -> aimerge-test{,-base}.conf
                  /var/db/repos/emerge-ai-test -> /var/db/repos/aimerge-test
+                    + profiles/repo_name в обоих оверлеях, иначе portageq держит старые
+                      имена репозиториев (D10); /var/cache/emerge-ai на хосте не было
+                 git push origin master   <-- DO merge: git-r3 берёт удалённую ветку,
+                    а из непушеного дерева 9999 не может собраться (D11)
                  sudo emerge --ask app-portage/aimerge
                  pip install -e .   (в репо, для тестов)
 
