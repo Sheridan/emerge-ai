@@ -85,13 +85,17 @@ def _as_findings(verdict) -> list:
 
 
 def menu_specs(verdict, plan, *, world: list[str] | None = None,
-               etc_dir: str = "/etc/portage") -> tuple[list[MenuSpec], list[str]]:
+               etc_dir: str = "/etc/portage",
+               exclude: frozenset = frozenset()) -> tuple[list[MenuSpec], list[str]]:
     """Deterministic menu (design D2/D6): clean plan -> [merge]; degraded ->
     executable typed fixes (config_edit whitelist kinds, the etcupdate
     channel, the whitelisted commands) + [merge as-is] with the
     unresolved-finding count. `world` (atoms, read via portage_compat) is the
     first validation pass of task 1.2 — a deselect whose atom left world is
-    not shown at all. `etc_dir` is the same directory the apply channel writes
+    not shown at all. `exclude` (variant keys run WITHOUT EFFECT this run,
+    design D4): those variants never come back as executable — the re-plan
+    would otherwise offer the same no-op round after round — they reappear as
+    manual lines. `etc_dir` is the same directory the apply channel writes
     to, so a `package.*` line names the file it really lands in — a
     category-layout host is told `package.accept_keywords/dev-libs` (spec:
     repair-actions, design D7). Non-executable advice never enters the list —
@@ -179,6 +183,18 @@ def menu_specs(verdict, plan, *, world: list[str] | None = None,
     else:
         merged_desc = f"merge the queue as shown ({queue_text})"
     specs.append(MenuSpec(key="merge", title=merged_desc, kind="merge", tiers=tiers))
+    if exclude:
+        # design D4: run without effect this run — out of the executable menu,
+        # into the manual lines (the exit wording stays in cli._consent_execute)
+        kept = []
+        for s in specs:
+            if s.key in exclude:
+                text = f"  manual (ran this run without effect): {s.title}"
+                if text not in manual:
+                    manual.append(text)
+            else:
+                kept.append(s)
+        specs = kept
     if len(specs) > MENU_CAP:
         merge = next(s for s in specs if s.kind == "merge")
         fixes = [s for s in specs if s.kind == "fix"]

@@ -231,6 +231,35 @@ def _cat_pkg(atom: str) -> str:
     return package_of(atom)
 
 
+def world_entries(world: list[str] | None, atom_or_cpv: str) -> list[str]:
+    """World-file lines naming the same cat/pkg as an atom/cpv, in file order
+    with duplicates collapsed. The deselect channel passes these VERBATIM to
+    `emerge --deselect`: portage compares the argument against the file lines
+    (Atom.intersects with slot guards), so a versioned or bare-cat/pkg form
+    either matches nothing or removes more entries than intended
+    (spec: repair-actions). No world list -> no entries."""
+    if world is None:
+        return []
+    key = _cat_pkg(atom_or_cpv)
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in world:
+        e = entry.strip()
+        if e and e not in seen and _cat_pkg(e) == key:
+            seen.add(e)
+            out.append(e)
+    return out
+
+
+def _is_atom(value: str) -> bool:
+    """Atom grammar shared with the whitelist: what the menu offers must be
+    what execute() will accept; a world line emerge itself would call "not a
+    package atom" stays advice (spec: repair-actions)."""
+    from emerge_ai.whitelist import ATOM_RE
+
+    return bool(ATOM_RE.match(value))
+
+
 def candidates(findings: list[Finding], *, world: list[str] | None = None) -> list[dict]:
     """Fix candidates split by what the apply channel can execute (spec:
     repair-actions): config_edit kinds, the etcupdate channel and the
@@ -266,12 +295,21 @@ def candidates(findings: list[Finding], *, world: list[str] | None = None) -> li
             if f.cpv and kw and "keyword" in f.evidence:
                 add("accept_keywords", f"={f.cpv} {kw.group(1)}", True)
             if f.cpv:
-                in_world = world is not None and any(
-                    _cat_pkg(e) == _cat_pkg(f.cpv) for e in world)
-                add("deselect",
-                    f"remove {f.cpv} from the world set (emerge --deselect {f.cpv})",
-                    in_world, atom=f.cpv)
-                if not in_world:
+                # spec: repair-actions — the deselect atom is the world-file
+                # line verbatim (portage matches arguments against the file;
+                # a versioned form matches nothing). A bare cat/pkg sitting
+                # next to other entries of the package would deselect every
+                # entry of that package at once, so it stays advice.
+                entries = world_entries(world, f.cpv)
+                for e in entries:
+                    broad = len(entries) > 1 and _cat_pkg(e) == e
+                    add("deselect",
+                        f"remove {e} from the world set (emerge --deselect {e})",
+                        not broad and _is_atom(e), atom=e)
+                if not entries:
+                    add("deselect",
+                        f"remove {f.cpv} from the world set (emerge --deselect {f.cpv})",
+                        False, atom=f.cpv)
                     add("world-review",
                         f"review the conflict around {f.cpv} "
                         "(keyword/use change or deselect)",

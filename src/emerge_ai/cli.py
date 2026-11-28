@@ -1061,6 +1061,10 @@ def main(
                 print(ui.warn(f"{exc}; consent free-text falls back to the menu"),
                       file=sys.stderr)
 
+        # variants this run executed but the file says nothing changed
+        # (whitelist effect check, design D4): not repairs, not offered again
+        no_effect: set[str] = set()
+
         def _consent_execute(spec):
             """Runs the typed action after the audit line (inside gate
             .apply_variant): the whitelist interpreter stays the only writer."""
@@ -1076,6 +1080,12 @@ def main(
                 return
             elif act.get("type") == "command":
                 res = _apply_action(act, run=run, emerge_binary=emerge_binary)
+                if res.get("status") == "no-effect":
+                    # rc 0 but the world line is still there (or unreadable):
+                    # the exit wording already printed the manual command —
+                    # this is not a fix and must not come back next round
+                    no_effect.add(spec.key)
+                    return
                 if res.get("status") != "executed":
                     # TOCTOU rejection (D2): message already printed by the
                     # validator, nothing mutated — not journaled as a fix
@@ -1124,7 +1134,8 @@ def main(
 
         while True:
             specs, manual = consent_mod.menu_specs(run.triage, plan, world=world_atoms,
-                                                   etc_dir=etc_dir)
+                                                   etc_dir=etc_dir,
+                                                   exclude=frozenset(no_effect))
             decision = consent_mod.run_dialog(
                 specs,
                 contract_block=consent_mod.protect_contract(

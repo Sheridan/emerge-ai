@@ -523,3 +523,26 @@ sudo emerge-ai -auDN --ask @world      # в TTY; далее — вопрос с�
 #     запрос ушёл с историей (23 сообщения, включая прошлый tool-обмен и ответ),
 #     ответ сослался на прошлый раунд («deselect не выбирайте»); q → «operator
 #     aborted; nothing changed», rc 0 (--ask), ни снапшота, ни merge не создано
+
+## Deselect по дословной строке world (fix-deselect-world-atom, выполняет пользователь)
+
+Живой хост. В `/var/lib/portage/world` есть `sys-firmware/edk2-bin` (установлен
+202408_p1, кандидат обновления 202608_p1) и слотовые записи `sys-devel/gcc:14`/`:15`.
+Проверка меняет мир — делать после копии world.
+
+```bash
+cp -a /var/lib/portage/world /var/lib/portage/world.bak.$$
+sudo emerge-ai -auDN @world          # в TTY; находка конфликта sys-firmware/edk2-bin
+#   → пункт меню deselect формулируется без версии кандидата: «remove
+#     sys-firmware/edk2-bin from the world set (emerge --deselect
+#     sys-firmware/edk2-bin)» — атом = дословная строка world, не CPV находки;
+#   → выбрать пункт: команда снимает ровно одну строку world (прочитать файл:
+#     запись ушла, соседние слоты/пакеты не задеты);
+#   → повторить deselect уже снятой записи (или слота, которого нет в world): emerge
+#     печатает «No matching atoms found in "world"» и выходит с кодом 0 — emerge-ai
+#     помечает это «no effect», печатает точную ручную команду, НЕ засчитывает
+#     починку в repairs и НЕ предлагает вариант вновь (меню пересобирается без него);
+#   → до фикса слот-атом = CPV находки (sys-firmware/edk2-bin-202608_p1) и emerge
+#     обрывался: «!!! 'sys-firmware/edk2-bin-202608_p1' is not a valid package atom».
+cp -a /var/lib/portage/world.bak.$$ /var/lib/portage/world   # вернуть мир
+```

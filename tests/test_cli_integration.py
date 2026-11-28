@@ -2,6 +2,7 @@ import builtins
 import io
 import json
 import os
+import pathlib
 import sys
 
 import pytest
@@ -1784,6 +1785,101 @@ def test_noninteractive_never_executes_world_fix_command(ok_compat, monkeypatch,
     assert not list(tmp_path.glob("world.emerge-ai.*.bak"))  # nor its backup
     saved = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert saved.get("consent_repairs", []) == []
+
+
+def test_deselect_no_effect_never_reoffered(emerge_stub, ok_compat, monkeypatch,
+                                            tmp_path, capsys):
+    """spec: repair-actions / design D4 — a deselect that ran without effect
+    (portage exits 0 even on 'No matching atoms found in "world"') must not
+    come back as an executable item and must not be counted as a repair."""
+    from emerge_ai import gate as gate_mod
+    from emerge_ai import portage_compat, whitelist
+
+    binary, _log, _fix = _flip_stub(tmp_path, monkeypatch,
+                                    "!!! dev-libs/jemalloc-5.4.0-r2 conflicts with app-misc/foo-1.0\n")
+    world = tmp_path / "world"
+    world.write_text("dev-libs/jemalloc\n")
+    monkeypatch.setattr(whitelist, "WORLD_FILE", str(world))
+    real_atoms = portage_compat.world_atoms
+    monkeypatch.setattr(portage_compat, "world_atoms",
+                        lambda path=str(world): real_atoms(path))
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+
+    answers = iter(["1", "q"])  # run the deselect, then quit on the rebuilt menu
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=lambda prompt="": next(answers))
+    assert rc != 0  # quit
+    out = capsys.readouterr()
+    assert "no effect" in out.out + out.err
+    assert "emerge --deselect dev-libs/jemalloc" in out.out + out.err  # manual command
+    # the stub emerge ran the deselect exactly once — the menu did not re-offer it
+    calls = [ln.split() for ln in (tmp_path / "calls.log").read_text().splitlines()]
+    assert [c for c in calls if "--deselect" in c] == [["--deselect", "dev-libs/jemalloc"]]
+    # audited as a no-effect, journaled as NOT a repair
+    audit = [json.loads(ln) for ln in
+             pathlib.Path(gate_mod.AUDIT_PATH).read_text().splitlines() if ln.strip()]
+    eff = [e for e in audit if e.get("decision") == "command-effect"]
+    assert eff and eff[-1]["changed"] is False
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved.get("consent_repairs", []) == []
+    assert "ran this run without effect" in out.out + out.err  # moved to manual lines
+
+
+def test_deselect_effective_is_counted_as_repair(emerge_stub, ok_compat, monkeypatch,
+                                                 tmp_path, capsys):
+    """The honest positive path: when the line really leaves the world file,
+    the run counts the repair (no no-effect wording anywhere)."""
+    from emerge_ai import gate as gate_mod
+    from emerge_ai import portage_compat, whitelist
+
+    binary, _log, _fix = _flip_stub(tmp_path, monkeypatch,
+                                    "!!! dev-libs/jemalloc-5.4.0-r2 conflicts with app-misc/foo-1.0\n")
+    world = tmp_path / "world"
+    world.write_text("dev-libs/jemalloc\n")
+    monkeypatch.setattr(whitelist, "WORLD_FILE", str(world))
+    real_atoms = portage_compat.world_atoms
+    monkeypatch.setattr(portage_compat, "world_atoms",
+                        lambda path=str(world): real_atoms(path))
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: True)
+
+    import subprocess as sp
+
+    real_run = sp.run  # capture before wrapping: the default runner is bound at import
+
+    class _Proc:
+        returncode, stdout, stderr = 0, '>>> Removing from "world" favorites file\n', ""
+
+    def runner(argv, **kwargs):  # a deselect that touches the favorites file
+        if "--deselect" in argv:
+            world.write_text("")
+            return _Proc()
+        return real_run(argv, **kwargs)
+
+    real_execute = whitelist.execute
+
+    def execute(name, slots, **kw):  # inject the runner for the deselect command
+        if name == "emerge-deselect":
+            kw["runner"] = runner
+        return real_execute(name, slots, **kw)
+
+    monkeypatch.setattr(whitelist, "execute", execute)
+    answers = iter(["1", "q"])
+    rc = cli.main(["app-misc/foo"], emerge_binary=binary, runs_dir=str(tmp_path),
+                  plan_fn=lambda a, s: Plan(entries=[PlanEntry("app-misc/foo-1.0", 5, "h")]),
+                  protect_fn=lambda run, plan: Protection(run_id=run.run_id),
+                  input_fn=lambda prompt="": next(answers))
+    assert rc != 0  # quit on the rebuilt menu
+    out = capsys.readouterr()
+    assert "no effect" not in out.out + out.err
+    audit = [json.loads(ln) for ln in
+             pathlib.Path(gate_mod.AUDIT_PATH).read_text().splitlines() if ln.strip()]
+    eff = [e for e in audit if e.get("decision") == "command-effect"]
+    assert eff and eff[-1]["changed"] is True
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert [r["variant"] for r in saved["consent_repairs"]] == ["deselect-dev-libs/jemalloc"]
+    assert "no effect" not in out.out + out.err
 
 
 # --- news digest in the run report (spec: repair-actions, design D5) ----------

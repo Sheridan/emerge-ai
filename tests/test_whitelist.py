@@ -2,6 +2,8 @@
 validation, TOCTOU re-check, backup, pre-execution audit ordering."""
 
 import json
+import os
+import pathlib
 
 import pytest
 
@@ -41,9 +43,9 @@ def test_registry_is_closed_and_templates_are_fixed():
                                        "emerge-deselect"}
     assert whitelist.render_argv("emaint-fix-world", {}) == ["emaint", "--fix", "world"]
     assert whitelist.render_argv("emaint-check-world", {}) == ["emaint", "--check", "world"]
-    assert whitelist.render_argv("emerge-deselect", {"atom": "dev-x/y-1.0"},
+    assert whitelist.render_argv("emerge-deselect", {"atom": "sys-devel/gcc:14"},
                                  binaries={"emerge": "/usr/local/bin/emerge"}) == \
-        ["/usr/local/bin/emerge", "--deselect", "dev-x/y-1.0"]
+        ["/usr/local/bin/emerge", "--deselect", "sys-devel/gcc:14"]
 
 
 def test_unknown_command_never_executes(tmp_path):
@@ -64,8 +66,26 @@ def test_slot_values_are_single_safe_argv_elements():
     for value in bad:
         errors = whitelist.validate("emerge-deselect", {"atom": value}, world=[])
         assert errors, f"{value!r} must be rejected"
-    assert whitelist.validate("emerge-deselect", {"atom": "dev-x/y-1.0:0::repo"},
-                              world=["dev-x/y-1.0"]) == []
+    # a versioned world line passes verbatim, slot and repo included
+    assert whitelist.validate("emerge-deselect", {"atom": "=dev-x/y-1.0:0::repo"},
+                              world=["=dev-x/y-1.0:0::repo"]) == []
+
+
+def test_atom_form_requires_an_operator_before_a_version():
+    # spec: repair-actions — "cat/pkg-1.2.3" is a cpv, not an atom: that exact
+    # shape made emerge print "is not a package atom" (rc 1) at execution time
+    errors = whitelist.validate("emerge-deselect", {"atom": "dev-x/y-1.0"},
+                                world=["dev-x/y-1.0"])
+    assert any("not a package atom" in e for e in errors)
+    # every portage operator carries a version; the bare form carries a slot
+    for ok in ["=dev-x/y-1.0", ">=dev-x/y-1.0", "<=dev-x/y-1.0-r1", "~dev-x/y-1.0",
+               "~>dev-x/y-1.0", "<dev-x/y-1.0", ">dev-x/y-1.0", "dev-x/y",
+               "dev-x/y:14", "dev-x/y:0::repo"]:
+        assert whitelist.validate("emerge-deselect", {"atom": ok}, world=[ok]) == [], ok
+    for bad_form in ["=dev-x/y", "~dev-x/y", "dev-x/y-1.0", ">=dev-x/y"]:
+        assert any("not a package atom" in e
+                   for e in whitelist.validate("emerge-deselect", {"atom": bad_form},
+                                               world=[bad_form])), bad_form
 
 
 def test_slots_shape_is_enforced():
@@ -79,13 +99,28 @@ def test_slots_shape_is_enforced():
 
 
 def test_membership_validator_against_world_list():
+    # membership is the world line VERBATIM, not a cat/pkg match (design D2)
+    assert whitelist.validate("emerge-deselect", {"atom": "dev-x/y"},
+                              world=["dev-x/y"]) == []
     assert any("@world" in e for e in
                whitelist.validate("emerge-deselect", {"atom": "dev-x/y"},
                                   world=["app-misc/other"]))
-    # cat/pkg comparison: an atom with another version still names the same
-    # world member, so the deselect slot is valid
-    assert whitelist.validate("emerge-deselect", {"atom": ">=dev-x/y-2"},
-                              world=["dev-x/y-1.0"]) == []
+    assert whitelist.validate("emerge-deselect", {"atom": "dev-x/y:14"},
+                              world=["dev-x/y:14"]) == []
+    # the same cat/pkg is not enough: the line must be the line
+    assert any("@world" in e for e in
+               whitelist.validate("emerge-deselect", {"atom": "dev-x/y"},
+                                  world=["dev-x/y:14"]))
+    assert any("@world" in e for e in
+               whitelist.validate("emerge-deselect", {"atom": "dev-x/y:14"},
+                                  world=["dev-x/y"]))
+    # the previously accepted "nearly right" form — an operator atom matching
+    # nothing in the file, emerge exiting 0 on 'No matching atoms' — is gone
+    assert any("@world" in e for e in
+               whitelist.validate("emerge-deselect", {"atom": ">=dev-x/y-2"},
+                                  world=["=dev-x/y-1.0"]))
+    assert whitelist.validate("emerge-deselect", {"atom": "=dev-x/y-1.0"},
+                              world=["=dev-x/y-1.0"]) == []
     # unreadable world -> fail closed, never "assume member"
     assert any("world" in e for e in
                whitelist.validate("emerge-deselect", {"atom": "dev-x/y"}, world=None))
@@ -193,3 +228,86 @@ def test_backup_failure_aborts_before_argv(tmp_path, capsys):
                             runner=make_runner(calls))
     assert res["status"] == "rejected" and "back up" in res["reason"]
     assert calls == []
+
+
+def test_execute_rejects_a_rewritten_world_line(tmp_path):
+    # the file line gained a slot since the menu was built — exact membership
+    # in the TOCTOU re-check catches a rewritten line, not only a removed one
+    world = world_file(tmp_path, ["dev-x/y:14"])
+    calls = []
+    res = whitelist.execute("emerge-deselect", {"atom": "dev-x/y"}, run_id="r1",
+                            runner=make_runner(calls),
+                            audit_path=tmp_path / "a.jsonl", world_file=world)
+    assert res["status"] == "rejected" and "@world" in res["reason"]
+    assert calls == []
+    assert pathlib.Path(world).read_text() == "dev-x/y:14\n"
+
+
+# --- effect check: verify "world-entry-removed" -------------------------------
+
+def test_deselect_no_effect_is_honest_when_the_line_stays(tmp_path):
+    # portage prints 'No matching atoms found in "world"' and exits 0 —
+    # the file, not the rc, says whether anything was fixed
+    world = world_file(tmp_path, ["dev-x/y"])
+    audit = tmp_path / "audit.jsonl"
+    msgs = []
+    res = whitelist.execute("emerge-deselect", {"atom": "dev-x/y"},
+                            runner=make_runner([], stdout='>>> No matching atoms found\n'),
+                            audit_path=audit, world_file=world, echo=msgs.append)
+    assert res["status"] == "no-effect" and res["changed"] is False
+    recs = audit_lines(audit)
+    assert recs[-1]["decision"] == "command-effect"
+    assert recs[-1]["changed"] is False and recs[-1]["returncode"] == 0
+    assert recs[-2]["decision"] == "command-execute"  # audit-before-mutation kept
+    assert any("no effect" in m and "emerge --deselect dev-x/y" in m for m in msgs)
+
+
+def test_deselect_effect_true_when_the_line_leaves_the_world(tmp_path):
+    world = world_file(tmp_path, ["dev-x/y", "app-misc/keep"])
+    audit = tmp_path / "audit.jsonl"
+
+    def runner(argv, **kwargs):  # a real deselect rewrites the favorites file
+        with open(world, "w") as fh:
+            fh.write("app-misc/keep\n")
+        return Proc(stdout='>>> Removing dev-x/y from "world" favorites file...\n')
+
+    res = whitelist.execute("emerge-deselect", {"atom": "dev-x/y"}, runner=runner,
+                            audit_path=audit, world_file=world)
+    assert res["status"] == "executed" and res["changed"] is True
+    assert audit_lines(audit)[-1]["decision"] == "command-effect"
+    assert audit_lines(audit)[-1]["changed"] is True
+
+
+def test_deselect_failed_command_is_no_effect(tmp_path):
+    world = world_file(tmp_path, ["dev-x/y"])
+    res = whitelist.execute("emerge-deselect", {"atom": "dev-x/y"},
+                            runner=make_runner([], rc=1),
+                            audit_path=tmp_path / "a.jsonl", world_file=world,
+                            echo=lambda m: None)
+    assert res["status"] == "no-effect" and res["changed"] is False
+
+
+def test_deselect_effect_unknown_when_world_unreadable(tmp_path):
+    world = world_file(tmp_path, ["dev-x/y"])
+
+    def runner(argv, **kwargs):
+        os.remove(world)
+        os.mkdir(world)  # the file cannot be re-read after the run
+        return Proc()
+
+    res = whitelist.execute("emerge-deselect", {"atom": "dev-x/y"}, runner=runner,
+                            audit_path=tmp_path / "a.jsonl", world_file=world,
+                            echo=lambda m: None)
+    assert res["status"] == "no-effect" and res["changed"] is None
+
+
+def test_commands_without_verify_have_no_changed_field(tmp_path):
+    world = world_file(tmp_path, ["dev-x/y"])
+    calls = []
+    res = whitelist.execute("emaint-fix-world", {}, run_id="r1",
+                            audit_path=tmp_path / "a.jsonl", world_file=world,
+                            runner=make_runner(calls))
+    assert res["status"] == "executed" and "changed" not in res
+    res = whitelist.execute("emaint-check-world", {}, runner=make_runner(calls),
+                            audit_path=tmp_path / "a.jsonl")
+    assert res["status"] == "executed" and "changed" not in res

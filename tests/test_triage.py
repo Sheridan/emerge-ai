@@ -162,6 +162,64 @@ def test_candidates_deselect_executable_for_world_member():
     assert cands["world-review"]["executable"] is False
 
 
+# --- deselect atoms resolve from the world file, not from the finding cpv ---
+# (spec: repair-actions, fix-deselect-world-atom; portage matches the argv
+# atom against the file lines, so the file line is the only reliable atom)
+
+def test_world_entries_returns_world_lines_verbatim():
+    world = ["sys-devel/gcc", "sys-devel/gcc:14", "sys-devel/gcc:15", "app-misc/other"]
+    want = ["sys-devel/gcc", "sys-devel/gcc:14", "sys-devel/gcc:15"]
+    assert triage.world_entries(world, "sys-devel/gcc-14") == want
+    assert triage.world_entries(world, "=sys-devel/gcc-14") == want
+    assert triage.world_entries(world, "app-misc/missing") == []
+    assert triage.world_entries(None, "sys-devel/gcc") == []
+    # duplicates collapse, file order is kept
+    assert triage.world_entries(["b/b/zz", "sys-devel/gcc:15", "sys-devel/gcc",
+                                 "sys-devel/gcc:15"], "sys-devel/gcc") == \
+        ["sys-devel/gcc:15", "sys-devel/gcc"]
+
+
+def test_candidates_deselect_uses_world_entry_not_candidate_version():
+    # the live case: finding names the merge candidate, world holds the entry
+    findings = [triage.Finding("conflict", "sys-firmware/edk2-bin",
+                               "!!! (sys-firmware/edk2-bin-202608_p1, installed) blocks app-emulation/qemu", 0)]
+    cands = [c for c in triage.candidates(findings, world=["sys-firmware/edk2-bin"])
+             if c["kind"] == "deselect"]
+    assert len(cands) == 1
+    assert cands[0]["executable"] is True
+    assert cands[0]["atom"] == "sys-firmware/edk2-bin"
+    assert "202608_p1" not in cands[0]["text"]
+    # a malformed world line emerge itself would refuse stays advice —
+    # the menu never offers what execute() would reject
+    cands = [c for c in triage.candidates(
+        findings, world=["sys-firmware/edk2-bin-202608_p1"]) if c["kind"] == "deselect"]
+    assert len(cands) == 1 and cands[0]["executable"] is False
+
+
+def test_candidates_deselect_one_variant_per_world_entry():
+    findings = [triage.Finding("conflict", "sys-devel/gcc",
+                               "!!! (sys-devel/gcc-14, installed) blocks dev-foo/x", 0)]
+    world = ["sys-devel/gcc", "sys-devel/gcc:14", "sys-devel/gcc:15"]
+    cands = [c for c in triage.candidates(findings, world=world)
+             if c["kind"] == "deselect"]
+    by_atom = {c["atom"]: c for c in cands}
+    assert set(by_atom) == set(world)
+    # the slotted entries deselect exactly themselves
+    assert by_atom["sys-devel/gcc:14"]["executable"] is True
+    assert by_atom["sys-devel/gcc:15"]["executable"] is True
+    assert "emerge --deselect sys-devel/gcc:14" in by_atom["sys-devel/gcc:14"]["text"]
+    # the bare entry would remove all three (measured: emerge prints three
+    # "Would remove" lines) — it stays manual advice
+    assert by_atom["sys-devel/gcc"]["executable"] is False
+    # world-review is not added while executable variants exist
+    assert not any(c["kind"] == "world-review"
+                   for c in triage.candidates(findings, world=world))
+    # alone, the bare entry is the exact entry — executable again
+    cands = [c for c in triage.candidates(findings, world=["sys-devel/gcc"])
+             if c["kind"] == "deselect"]
+    assert len(cands) == 1 and cands[0]["executable"] is True
+
+
 def test_render_report_advisory_only_no_questions():
     v = triage.scan(LIVE_DEGRADED, UPDATE_ARGV)
     lines = triage.render_report(v, "/runs/r1/plan-output.txt", for_pretend=True)

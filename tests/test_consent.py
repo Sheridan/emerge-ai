@@ -171,6 +171,39 @@ def test_menu_deselect_requires_world_membership():
     assert not any(s.key.startswith("deselect") for s in specs)
 
 
+def test_menu_deselect_atom_is_the_world_line_verbatim():
+    """spec: repair-actions (fix-deselect-world-atom) — the candidate version
+    never reaches the command: title, undo and slot all carry the world line."""
+    verdict = _verdict(triage.Finding(
+        "conflict", "sys-firmware/edk2-bin",
+        "!!! (sys-firmware/edk2-bin-202608_p1, installed) blocks app-emulation/qemu", 1))
+    specs, _ = consent.menu_specs(verdict, PLAN_REST, world=["sys-firmware/edk2-bin"])
+    ds = next(s for s in specs if s.key.startswith("deselect"))
+    assert ds.key == "deselect-sys-firmware/edk2-bin"
+    assert ds.title == ("remove sys-firmware/edk2-bin from the world set "
+                        "(emerge --deselect sys-firmware/edk2-bin)")
+    assert "undo: emerge --noreplace sys-firmware/edk2-bin" in ds.detail
+    assert ds.action["slots"] == {"atom": "sys-firmware/edk2-bin"}
+    assert "202608_p1" not in ds.title + " ".join(ds.detail)
+
+
+def test_menu_excludes_variants_run_without_effect():
+    """design D4: after a deselect that changed nothing, the rebuilt menu must
+    not offer the same no-op again — it moves to the manual lines."""
+    verdict = _verdict(triage.Finding(
+        "conflict", "dev-libs/jemalloc",
+        "!!! (dev-libs/jemalloc-5.4.0-r2, installed) blocks app-misc/x", 3))
+    key = "deselect-dev-libs/jemalloc"
+    specs, _ = consent.menu_specs(verdict, PLAN_REST, world=["dev-libs/jemalloc"])
+    assert any(s.key == key for s in specs)
+    specs, manual = consent.menu_specs(verdict, PLAN_REST, world=["dev-libs/jemalloc"],
+                                       exclude=frozenset({key}))
+    assert not any(s.key == key for s in specs)
+    assert any("without effect" in line and "dev-libs/jemalloc" in line
+               for line in manual)
+    assert any(s.kind == "merge" for s in specs)  # merge stays reachable
+
+
 def test_menu_verdict_dict_roundtrip_matches_object():
     verdict = _verdict()
     from_dict, _ = consent.menu_specs(verdict.to_dict(), PLAN_REST)

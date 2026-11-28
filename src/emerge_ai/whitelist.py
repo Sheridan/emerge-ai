@@ -30,8 +30,20 @@ WORLD_FILE = "/var/lib/portage/world"
 # slot values are single argv elements: no whitespace, no shell metacharacters,
 # never a flag (defense in depth on top of shell-less subprocess)
 SLOT_VALUE_RE = re.compile(r"^[A-Za-z0-9+/=<>~._:@,-]+$")
+# portage atom grammar (a cpv is NOT an atom: "cat/pkg-1.2.3" makes emerge print
+# "is not a package atom"): operators are < > <= >= = ~ ~> and each one REQUIRES
+# a version, while the bare form carries at most a slot (spec: repair-actions,
+# the deselect slot is a verbatim world line). _V is portage's own version
+# grammar; in the bare form the name must not END in a version segment — that
+# is where portage would cut the (illegal) version out — while real names like
+# "font-adobe-100dpi" (100dpi is not a version) stay valid atoms.
+_V = r"\d+(?:\.\w+)*(?:_(?:alpha|beta|pre|rc|p)\d{1,2})?(?:_p\d+)?(?:-r\d+)?"
+_ATOM_CAT = r"[a-z][a-z0-9+_.-]*"
+_ATOM_CPV = _ATOM_CAT + r"/[A-Za-z][A-Za-z0-9+_.-]*"
+_ATOM_NAME = r"(?!.*-" + _V + r"(?::.+)?$)[A-Za-z][A-Za-z0-9+_.-]*"
 ATOM_RE = re.compile(
-    r"^(?:[<>=]=?)?[a-z][a-z0-9+_.-]*/[A-Za-z][A-Za-z0-9+_.-]*(?:-\d[\w.]*(?:-r\d+)?)?(?::.+)?$"
+    r"^(?:(?:[<>]=?|=|~>?)" + _ATOM_CPV + "-" + _V
+    + r"|" + _ATOM_CAT + "/" + _ATOM_NAME + r")(?::.+)?$"
 )
 PLACEHOLDER_RE = re.compile(r"^\{(\w+)}$")
 
@@ -50,6 +62,7 @@ class CommandSpec:
     read_only: bool = False
     backup: str | None = None
     undo: str = ""
+    verify: str | None = None  # post-execution effect check (see execute)
 
 
 COMMANDS: dict[str, CommandSpec] = {
@@ -71,16 +84,11 @@ COMMANDS: dict[str, CommandSpec] = {
         slots=("atom",),
         validators={"atom": ("atom",)},
         undo="emerge --noreplace {atom}",
+        # emerge exits 0 on 'No matching atoms found in "world"': the effect is
+        # only true when the file line is actually gone (spec: repair-actions)
+        verify="world-entry-removed",
     ),
 }
-
-
-def _cat_pkg(atom: str) -> str:
-    """cat/pkg of an atom via tiers.package_of — world entries and slot atoms
-    compare on the same key the tier machinery uses."""
-    from emerge_ai.tiers import package_of
-
-    return package_of(atom)
 
 
 def _validate_atom(value: str, world) -> list[str]:
@@ -88,11 +96,14 @@ def _validate_atom(value: str, world) -> list[str]:
         return [f"{value!r} is not a package atom"]
     if world is None:
         return [f"cannot check world membership for {value!r}: world file unreadable"]
-    key = _cat_pkg(value)
-    for entry in world:
-        e = entry.strip()
-        if e == value or _cat_pkg(e) == key:
-            return []
+    # Membership is the world line VERBATIM, not a cat/pkg match: portage's
+    # action_deselect compares atoms with Atom.intersects(), so a "nearly
+    # right" atom (=cat/pkg-1.2.3, another slot) matches nothing while the
+    # command still exits 0 — a silent no-op recorded as a fix. Exact match
+    # also makes the TOCTOU re-check catch a rewritten line (slot added by a
+    # parallel run), not only a removed one.
+    if any(e.strip() == value for e in world):
+        return []
     return [f"{value!r} is not a member of @world"]
 
 
@@ -178,6 +189,21 @@ def backup_world(run_id: str, *, world_file: str | None = None) -> str:
     return str(dest)
 
 
+def _effect_world_entry_removed(atom: str, world_file: str, returncode: int):
+    """Effect of `emerge --deselect <atom>` measured against the world file:
+    True when the line is gone, False when it is still listed or the command
+    failed (portage exits 0 on 'No matching atoms found in \"world\"' — an rc
+    is not an effect), None when the file cannot be re-read — unknown, never
+    assumed (spec: repair-actions)."""
+    if returncode != 0:
+        return False
+    try:
+        entries = portage_compat.world_atoms(world_file)
+    except portage_compat.PortageUnavailable:
+        return None
+    return not any(e.strip() == atom for e in entries)
+
+
 def execute(name: str, slots: dict, *, run_id: str = "",
             audit_path: str | Path | None = None,
             world: list[str] | None | bool = True,
@@ -188,7 +214,10 @@ def execute(name: str, slots: dict, *, run_id: str = "",
     """The whitelisted-command executor: re-validate (TOCTOU, D2) -> backup ->
     pre-execution audit -> fixed argv. Rejects never mutate and never raise:
     the caller shows `reason` and the menu rebuilds. Read-only commands skip
-    audit/backup but are still recorded nowhere — nothing changed."""
+    audit/backup but are still recorded nowhere — nothing changed. A spec with
+    `verify` additionally re-checks the effect after the run: the result then
+    carries `changed` and status `no-effect` when the file says nothing
+    happened, whatever the exit code said."""
     spec = COMMANDS.get(name)
     if spec is None:
         return {"status": "rejected", "reason": f"unknown whitelisted command {name!r}"}
@@ -230,5 +259,22 @@ def execute(name: str, slots: dict, *, run_id: str = "",
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"status": "error", "reason": f"{name}: {exc}", "argv": argv}
     out = ui.strip_ansi((proc.stdout or "") + (proc.stderr or ""))
-    return {"status": "executed", "returncode": proc.returncode, "output": out,
-            "argv": argv, "backup": backup, "undo": undo}
+    res = {"status": "executed", "returncode": proc.returncode, "output": out,
+           "argv": argv, "backup": backup, "undo": undo}
+    if spec.verify == "world-entry-removed":
+        # the honest effect (design D3): rc 0 with the line still in the file
+        # is a no-op, not a fix — the caller must not count it or re-offer it
+        atom = str(slots.get("atom", ""))
+        res["changed"] = _effect_world_entry_removed(atom, world_file, proc.returncode)
+        if not gate.audit({"command": name, "argv": argv, "slots": dict(slots),
+                           "decision": "command-effect", "changed": res["changed"],
+                           "returncode": proc.returncode}, audit_path):
+            echo(ui.err(f"whitelist {name}: effect audit unwritable — the command "
+                        "already ran, check the world file by hand"))
+        if res["changed"] is not True:
+            echo(ui.err(f"whitelist {name}: no effect — {atom!r} is still listed "
+                        "in the world file (or it could not be re-read); not "
+                        f"counted as a fix — if intended, run it by hand: "
+                        f"emerge --deselect {atom}"))
+            res["status"] = "no-effect"
+    return res

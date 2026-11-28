@@ -756,3 +756,38 @@ def test_typed_variants_findings_drive_whitelist_commands():
     keys = {v["key"] for v in typed_variants(incident, world=[])}
     assert "deselect-dev-libs/jemalloc" not in keys
     assert "emaint-world" in keys
+
+
+def test_typed_deselect_slot_is_the_world_line_not_the_finding_cpv():
+    """The host regression (fix-deselect-world-atom): the installed candidate
+    version must never reach the command — the ask channel sends the verbatim
+    world line, the only form portage's action_deselect matches."""
+    incident = {
+        "class": "plan-degraded", "argv": ["emerge", "-uD", "app-emulation/qemu"],
+        "findings": [
+            {"kind": "conflict", "cpv": "sys-firmware/edk2-bin-202608_p1", "line_no": 2,
+             "evidence": "!!! (sys-firmware/edk2-bin-202608_p1, installed) blocks "
+                         "app-emulation/qemu-9.0"},
+        ],
+    }
+    keys = {v["key"]: v for v in typed_variants(incident, world=["sys-firmware/edk2-bin"])}
+    v = keys["deselect-sys-firmware/edk2-bin"]
+    assert v["action"]["slots"] == {"atom": "sys-firmware/edk2-bin"}
+    assert "202608_p1" not in v["title"] + v["key"] + str(v["action"])
+    # several slotted world lines: each line deselects on its own, so both
+    # are offered verbatim — and a bare cat/pkg alongside a sibling never is
+    keys = {v["key"]: v for v in typed_variants(
+        {"class": "plan-degraded", "argv": [], "findings": [
+            {"kind": "conflict", "cpv": "sys-devel/gcc-15.0.99", "line_no": 1,
+             "evidence": "!!! (sys-devel/gcc-15.0.99, installed) blocks x"}]},
+        world=["sys-devel/gcc:14", "sys-devel/gcc:15"])}
+    assert keys["deselect-sys-devel/gcc:14"]["action"]["slots"] == {"atom": "sys-devel/gcc:14"}
+    assert keys["deselect-sys-devel/gcc:15"]["action"]["slots"] == {"atom": "sys-devel/gcc:15"}
+    keys = {v["key"] for v in typed_variants(
+        {"class": "plan-degraded", "argv": [], "findings": [
+            {"kind": "conflict", "cpv": "sys-devel/gcc-15.0.99", "line_no": 1,
+             "evidence": "!!! (sys-devel/gcc-15.0.99, installed) blocks x"}]},
+        world=["sys-devel/gcc", "sys-devel/gcc:14"])}
+    # the bare line would remove every gcc entry at once — advice, not a command
+    assert "deselect-sys-devel/gcc" not in keys
+    assert "deselect-sys-devel/gcc:14" in keys
